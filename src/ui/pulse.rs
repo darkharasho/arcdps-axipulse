@@ -174,38 +174,206 @@ fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SupportMode { Healing, Downed, Barrier }
+
+static SUPPORT_MODE: Lazy<Mutex<SupportMode>> = Lazy::new(|| Mutex::new(SupportMode::Healing));
+
 fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
     use crate::pulse_metrics::*;
     use crate::squad_rank::{rank_in_squad, RankMetric};
+    use crate::top_heals::{top_healing, top_downed_healing, top_barrier};
 
     let p = &json.players[idx];
     let st = strips(p);
     let cl = cleanses(p);
     let cl_self = cleanse_self(p);
-    let cc_in = incoming_cc(p);
+    let has_heal = has_healing_data(p);
+    let heal = healing(p);
+    let heal_hps = hps(p);
+    let heal_downed = healing_downed(p);
+    let barr = barrier(p);
+    let inc_heal = incoming_healing(p);
 
+    // Hero banner — defaults to Healing if the addon is producing data,
+    // else falls back to Boon Strips (the prior behaviour).
     let strips_rank = rank_in_squad(json, idx, RankMetric::Strips);
-    hero_banner(ui,
-        "BOON STRIPS", ACCENT_SUPPORT,
-        &st.to_string(), "",
-        strips_rank.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
-    );
+    if has_heal && heal > 0 {
+        hero_banner(ui,
+            "HEALING OUTPUT", ACCENT_SUPPORT,
+            &format_damage(heal),
+            &format!("{} HPS", format_damage(heal_hps)),
+            None,
+        );
+    } else {
+        hero_banner(ui,
+            "BOON STRIPS", ACCENT_SUPPORT,
+            &st.to_string(), "",
+            strips_rank.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
+        );
+    }
     ui.dummy([0.0, 2.0]);
 
     let cl_rank = rank_in_squad(json, idx, RankMetric::Cleanses);
-    let cells = [
-        ("CLEANSES",      ACCENT_CLEANSE, cl.to_string(),      cl_rank.map(ordinal)),
-        ("SELF CLEANSE",  ACCENT_CLEANSE, cl_self.to_string(), None),
-        ("INCOMING CC",   ACCENT_DEFEND,  cc_in.to_string(),   None),
-        ("STRIPS / SEC",  ACCENT_SUPPORT,
-            format!("{:.2}", st as f64 / (json.duration_ms.max(1) as f64 / 1000.0)),
-            None),
-    ];
-    draw_2col_card_grid(ui, &cells);
+    let strips_rank2 = rank_in_squad(json, idx, RankMetric::Strips);
+    let cells: Vec<(&str, [f32; 4], String, Option<String>)> = if has_heal {
+        vec![
+            ("BARRIER",       [0.65, 0.51, 0.91, 1.0], format_damage(barr),       None),
+            ("DOWNED HEALING",ACCENT_DOWN,             format_damage(heal_downed), None),
+            ("STRIPS",        ACCENT_SUPPORT,          st.to_string(),            strips_rank2.map(ordinal)),
+            ("CLEANSES",      ACCENT_CLEANSE,          cl.to_string(),            cl_rank.map(ordinal)),
+            ("SELF CLEANSE",  ACCENT_CLEANSE,          cl_self.to_string(),       None),
+            ("INCOMING HEAL", ACCENT_SUCCESS,          format_damage(inc_heal),   None),
+        ]
+    } else {
+        vec![
+            ("CLEANSES",      ACCENT_CLEANSE, cl.to_string(),      cl_rank.map(ordinal)),
+            ("SELF CLEANSE",  ACCENT_CLEANSE, cl_self.to_string(), None),
+            ("STRIPS / SEC",  ACCENT_SUPPORT,
+                format!("{:.2}", st as f64 / (json.duration_ms.max(1) as f64 / 1000.0)),
+                None),
+            ("INCOMING HEAL", ACCENT_SUCCESS,
+                "no addon".to_string(), None),
+        ]
+    };
+    let cells_refs: Vec<(&str, [f32; 4], String, Option<String>)> = cells;
+    draw_2col_card_grid(ui, &cells_refs);
 
-    ui.dummy([0.0, 4.0]);
-    ui.text_disabled("Per-skill heal / barrier breakdowns require the arcdps");
-    ui.text_disabled("healing addon and aren't wired in Pulse v1.");
+    if !has_heal {
+        ui.dummy([0.0, 4.0]);
+        ui.text_disabled("Per-skill heal / barrier breakdowns require the arcdps");
+        ui.text_disabled("healing addon (arcdps_healing_stats.dll).");
+        return;
+    }
+
+    // Mode toggle for top-skills.
+    ui.dummy([0.0, 6.0]);
+    render_support_mode_toggle(ui);
+
+    let mode = SUPPORT_MODE.lock().ok().map(|g| *g).unwrap_or(SupportMode::Healing);
+    section_label(ui, match mode {
+        SupportMode::Healing => "TOP HEALING SKILLS",
+        SupportMode::Downed  => "TOP DOWNED-HEALING SKILLS",
+        SupportMode::Barrier => "TOP BARRIER SKILLS",
+    });
+
+    match mode {
+        SupportMode::Healing => {
+            let skills = top_healing(p, 8);
+            render_value_bars(ui, json, &skills.iter().map(|s| (s.id, s.healing)).collect::<Vec<_>>(),
+                              "heal", [0.40, 0.85, 0.65, 0.55]);
+        }
+        SupportMode::Downed => {
+            let skills = top_downed_healing(p, 8);
+            render_value_bars(ui, json, &skills.iter().map(|s| (s.id, s.downed_healing)).collect::<Vec<_>>(),
+                              "down", [0.97, 0.55, 0.42, 0.55]);
+        }
+        SupportMode::Barrier => {
+            let skills = top_barrier(p, 8);
+            render_value_bars(ui, json, &skills.iter().map(|s| (s.id, s.barrier)).collect::<Vec<_>>(),
+                              "barr", [0.65, 0.51, 0.91, 0.55]);
+        }
+    }
+}
+
+fn render_support_mode_toggle(ui: &Ui) {
+    let mut current = SUPPORT_MODE.lock().ok().map(|g| *g).unwrap_or(SupportMode::Healing);
+    for (i, (label, mode)) in [
+        ("Healing", SupportMode::Healing),
+        ("Downed",  SupportMode::Downed),
+        ("Barrier", SupportMode::Barrier),
+    ].iter().enumerate() {
+        let selected = current == *mode;
+        let tokens = if selected {
+            vec![
+                ui.push_style_color(StyleColor::Button,        [0.18, 0.22, 0.30, 1.0]),
+                ui.push_style_color(StyleColor::ButtonHovered, [0.22, 0.26, 0.34, 1.0]),
+                ui.push_style_color(StyleColor::ButtonActive,  [0.24, 0.28, 0.36, 1.0]),
+                ui.push_style_color(StyleColor::Text,          TEXT_PRIMARY),
+            ]
+        } else {
+            vec![ui.push_style_color(StyleColor::Text, TEXT_SECONDARY)]
+        };
+        if ui.button(label) { current = *mode; }
+        for t in tokens { t.pop(); }
+        if i + 1 < 3 { ui.same_line(); }
+    }
+    if let Ok(mut g) = SUPPORT_MODE.lock() { *g = current; }
+}
+
+/// Renders a stack of value bars from `(id, value)` pairs, looking up
+/// names via `resolve_skill_name`. Generalises the damage-skill bar
+/// renderer for any non-negative numeric value.
+fn render_value_bars(
+    ui: &Ui,
+    json: &EiJson,
+    pairs: &[(i64, u64)],
+    id_prefix: &str,
+    bar_color: [f32; 4],
+) {
+    if pairs.is_empty() {
+        ui.text_disabled("No skills recorded.");
+        return;
+    }
+    let max = pairs.first().map(|p| p.1).unwrap_or(1).max(1);
+    let total: u64 = pairs.iter().map(|p| p.1).sum();
+    for (i, (id, value)) in pairs.iter().enumerate() {
+        let frac = *value as f32 / max as f32;
+        let pct = if total > 0 { *value as f64 / total as f64 * 100.0 } else { 0.0 };
+        let name = resolve_skill_name(json, *id, "");
+        draw_value_bar(ui, id_prefix, i, *id, &name, frac, pct, &format_damage(*value), bar_color);
+    }
+}
+
+fn draw_value_bar(
+    ui: &Ui,
+    id_prefix: &str,
+    row_idx: usize,
+    id: i64,
+    name: &str,
+    frac: f32,
+    pct: f64,
+    value: &str,
+    bar_color: [f32; 4],
+) {
+    let avail = ui.content_region_avail()[0].max(120.0);
+    let row_h = (ui.text_line_height() * 1.55).max(24.0);
+    let cursor = ui.cursor_screen_pos();
+    let draw = ui.get_window_draw_list();
+
+    draw.add_rect([cursor[0], cursor[1]],
+                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD)
+        .filled(true).rounding(5.0).build();
+    let bar_w = avail * frac.clamp(0.0, 1.0);
+    if bar_w > 0.5 {
+        draw.add_rect([cursor[0], cursor[1]],
+                      [cursor[0] + bar_w, cursor[1] + row_h], bar_color)
+            .filled(true).rounding(5.0).build();
+    }
+    draw.add_rect([cursor[0], cursor[1]],
+                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
+        .rounding(5.0).build();
+
+    let pad = 10.0;
+    let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+    draw.add_text([cursor[0] + pad + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
+    draw.add_text([cursor[0] + pad, text_y], TEXT_PRIMARY, name);
+
+    let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
+    let val_w = ui.calc_text_size(value)[0];
+    let pct_w = ui.calc_text_size(&pct_label)[0];
+    draw.add_text([cursor[0] + avail - pad - val_w + 1.0, text_y + 1.0],
+                   [0.0, 0.0, 0.0, 0.55], value);
+    draw.add_text([cursor[0] + avail - pad - val_w, text_y], TEXT_PRIMARY, value);
+    if !pct_label.is_empty() {
+        draw.add_text(
+            [cursor[0] + avail - pad - val_w - 14.0 - pct_w, text_y],
+            TEXT_SECONDARY, &pct_label,
+        );
+    }
+
+    ui.set_cursor_screen_pos(cursor);
+    ui.invisible_button(format!("##{id_prefix}-{row_idx}-{id}"), [avail, row_h]);
 }
 
 fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {

@@ -88,6 +88,86 @@ pub struct EiPlayer {
     pub health_percents: Vec<Vec<f64>>,
     #[serde(default)]
     pub combat_replay_data: Option<ReplayData>,
+
+    /// Populated when the arcdps healing addon is loaded. Absent for
+    /// players whose client didn't have the addon running.
+    #[serde(default)]
+    pub ext_healing_stats: Option<ExtHealingStats>,
+    #[serde(default)]
+    pub ext_barrier_stats: Option<ExtBarrierStats>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtHealingStats {
+    /// Outer index = recipient ally, inner = phase. `[0].healing` is
+    /// the total this player healed that ally in phase 0.
+    #[serde(default)]
+    pub outgoing_healing_allies: Vec<Vec<OutgoingHealEntry>>,
+    /// Phases × skill entries.
+    #[serde(default)]
+    pub total_healing_dist: Vec<Vec<HealDistEntry>>,
+    /// Per-second cumulative incoming healing — `[phase][sec]`.
+    #[serde(default, rename = "healingReceived1S")]
+    pub healing_received_1s: Vec<Vec<u64>>,
+    /// Per-second cumulative outgoing healing — `[phase][sec]`.
+    #[serde(default, rename = "alliedHealing1S")]
+    pub allied_healing_1s: Vec<Vec<u64>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingHealEntry {
+    #[serde(default)]
+    pub healing: u64,
+    #[serde(default)]
+    pub hps: u64,
+    #[serde(default)]
+    pub downed_healing: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealDistEntry {
+    pub id: i64,
+    #[serde(default)]
+    pub total_healing: u64,
+    #[serde(default)]
+    pub total_downed_healing: u64,
+    #[serde(default)]
+    pub hits: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtBarrierStats {
+    #[serde(default)]
+    pub outgoing_barrier_allies: Vec<Vec<OutgoingBarrierEntry>>,
+    #[serde(default)]
+    pub total_barrier_dist: Vec<Vec<BarrierDistEntry>>,
+    #[serde(default, rename = "barrierReceived1S")]
+    pub barrier_received_1s: Vec<Vec<u64>>,
+    #[serde(default, rename = "alliedBarrier1S")]
+    pub allied_barrier_1s: Vec<Vec<u64>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingBarrierEntry {
+    #[serde(default)]
+    pub barrier: u64,
+    #[serde(default)]
+    pub bps: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BarrierDistEntry {
+    pub id: i64,
+    #[serde(default)]
+    pub total_barrier: u64,
+    #[serde(default)]
+    pub hits: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

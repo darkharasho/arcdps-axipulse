@@ -47,3 +47,56 @@ pub fn down_contribution(p: &EiPlayer) -> u64 {
     if from_stats > 0 { return from_stats; }
     p.total_damage_dist.iter().flatten().map(|e| e.down_contribution).sum()
 }
+
+// --- arcdps healing addon derives (Option-guarded — absent when the
+//     player's client didn't have arcdps_healing_stats.dll loaded) ----
+
+pub fn has_healing_data(p: &EiPlayer) -> bool {
+    p.ext_healing_stats.is_some()
+}
+
+pub fn healing(p: &EiPlayer) -> u64 {
+    p.ext_healing_stats.as_ref()
+        .map(|h| h.outgoing_healing_allies.iter()
+            .filter_map(|recip| recip.first().map(|e| e.healing))
+            .sum())
+        .unwrap_or(0)
+}
+
+pub fn hps(p: &EiPlayer) -> u64 {
+    p.ext_healing_stats.as_ref()
+        .map(|h| h.outgoing_healing_allies.iter()
+            .filter_map(|recip| recip.first().map(|e| e.hps))
+            .sum())
+        .unwrap_or(0)
+}
+
+pub fn healing_downed(p: &EiPlayer) -> u64 {
+    p.ext_healing_stats.as_ref()
+        .map(|h| h.outgoing_healing_allies.iter()
+            .filter_map(|recip| recip.first().map(|e| e.downed_healing))
+            .sum())
+        .unwrap_or(0)
+}
+
+pub fn barrier(p: &EiPlayer) -> u64 {
+    p.ext_barrier_stats.as_ref()
+        .map(|h| h.outgoing_barrier_allies.iter()
+            .filter_map(|recip| recip.first().map(|e| e.barrier))
+            .sum())
+        .unwrap_or(0)
+}
+
+pub fn incoming_healing(p: &EiPlayer) -> u64 {
+    p.ext_healing_stats.as_ref()
+        .and_then(|h| h.healing_received_1s.get(0))
+        .and_then(|arr| arr.last().copied())
+        .unwrap_or(0)
+}
+
+pub fn incoming_barrier(p: &EiPlayer) -> u64 {
+    p.ext_barrier_stats.as_ref()
+        .and_then(|h| h.barrier_received_1s.get(0))
+        .and_then(|arr| arr.last().copied())
+        .unwrap_or(0)
+}
