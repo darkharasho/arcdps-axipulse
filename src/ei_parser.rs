@@ -5,6 +5,14 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Win32 `CREATE_NO_WINDOW` — suppresses the console window that Windows
+/// would otherwise allocate for a CUI subprocess spawned from a GUI app
+/// like GW2. Without this flag EI flashes a black terminal on every parse.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use crate::ei_bundle::{dotnet_root, ei_cli_exe};
 use crate::ei_model::EiJson;
@@ -70,6 +78,8 @@ pub fn parse_log(
     if dotnet.join("dotnet.exe").exists() {
         cmd.env("DOTNET_ROOT", &dotnet);
     }
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
     let mut child = cmd.spawn().map_err(ParseError::SubprocessSpawn)?;
 
     let timeout = Duration::from_secs(600);
