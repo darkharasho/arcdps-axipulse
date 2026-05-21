@@ -32,10 +32,67 @@ pub fn render_content(
     idx: usize,
     layers: &mut crate::config::TimelineLayers,
 ) {
+    use crate::timeline_boons::{defensive_boons, offensive_boons};
+    use crate::timeline_buckets::{extract_damage_dealt, extract_damage_taken};
+    use crate::timeline_distance::distance_to_commander_per_second;
+    use crate::timeline_health::sample_health_per_second;
+
     render_layer_toggles(ui, layers);
     ui.separator();
     render_time_axis(ui, json.duration_ms);
-    render_lanes(ui, json, idx, layers);
+
+    // Compute lane data once so the crosshair pass can re-sample without
+    // doubling EI traversal.
+    let p = &json.players[idx];
+    let dur = json.duration_ms;
+    let health = if layers.health { sample_health_per_second(p, dur) } else { Vec::new() };
+    let dmg_dealt = if layers.damage_dealt { extract_damage_dealt(p) } else { Vec::new() };
+    let dmg_taken = if layers.damage_taken { extract_damage_taken(p) } else { Vec::new() };
+    let distance = if layers.distance_to_tag {
+        distance_to_commander_per_second(json, idx, dur)
+    } else { Vec::new() };
+    let off = if layers.offensive_boons { offensive_boons(p, dur) } else { Vec::new() };
+    let def = if layers.defensive_boons { defensive_boons(p, dur) } else { Vec::new() };
+
+    let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
+    let lanes_origin = ui.cursor_screen_pos();
+    let data_x = lanes_origin[0] + LANE_LABEL_W;
+    let data_w = avail - LANE_LABEL_W;
+    let lanes_top_y = lanes_origin[1];
+
+    if layers.health {
+        let v: Vec<f32> = health.iter().map(|x| *x as f32).collect();
+        draw_area_lane(ui, "Health", COLOR_HEALTH, &v, 100.0);
+    }
+    if layers.damage_dealt {
+        let v: Vec<f32> = dmg_dealt.iter().map(|x| *x as f32).collect();
+        draw_area_lane_auto(ui, "Dmg Dealt", COLOR_DMG, &v);
+    }
+    if layers.damage_taken {
+        let v: Vec<f32> = dmg_taken.iter().map(|x| *x as f32).collect();
+        draw_area_lane_auto(ui, "Dmg Taken", COLOR_TAKEN, &v);
+    }
+    if layers.distance_to_tag {
+        if distance.is_empty() {
+            draw_empty_lane(ui, "Dist Tag", COLOR_DIST, "no commander tagged");
+        } else {
+            let v: Vec<f32> = distance.iter().map(|x| *x as f32).collect();
+            draw_area_lane_auto(ui, "Dist Tag", COLOR_DIST, &v);
+        }
+    }
+    if layers.offensive_boons {
+        draw_boon_lane(ui, "Off Boons", COLOR_OFF, &off, dur);
+    }
+    if layers.defensive_boons {
+        draw_boon_lane(ui, "Def Boons", COLOR_DEF, &def, dur);
+    }
+
+    let lanes_bottom_y = ui.cursor_screen_pos()[1];
+    draw_hover_crosshair(
+        ui, data_x, data_w, lanes_top_y, lanes_bottom_y, dur,
+        layers, &health, &dmg_dealt, &dmg_taken, &distance, &off, &def,
+    );
+
     ui.dummy([0.0, 6.0]);
     render_inspector(ui, json, idx);
 }
@@ -75,43 +132,123 @@ fn render_time_axis(ui: &Ui, duration_ms: u64) {
     ui.dummy([avail, ui.text_line_height() + 4.0]);
 }
 
-fn render_lanes(ui: &Ui, json: &EiJson, idx: usize, layers: &crate::config::TimelineLayers) {
-    use crate::timeline_buckets::{extract_damage_dealt, extract_damage_taken};
-    use crate::timeline_health::sample_health_per_second;
-    use crate::timeline_distance::distance_to_commander_per_second;
-    use crate::timeline_boons::{offensive_boons, defensive_boons};
+#[allow(clippy::too_many_arguments)]
+fn draw_hover_crosshair(
+    ui: &Ui,
+    data_x: f32,
+    data_w: f32,
+    top_y: f32,
+    bottom_y: f32,
+    duration_ms: u64,
+    layers: &crate::config::TimelineLayers,
+    health: &[f64],
+    dmg_dealt: &[u64],
+    dmg_taken: &[u64],
+    distance: &[f64],
+    off: &[crate::timeline_boons::BoonSeries],
+    def: &[crate::timeline_boons::BoonSeries],
+) {
+    if !ui.is_mouse_hovering_rect([data_x, top_y], [data_x + data_w, bottom_y]) {
+        return;
+    }
+    let mouse = ui.io().mouse_pos;
+    if !mouse[0].is_finite() || data_w <= 0.0 { return; }
+    let pct = ((mouse[0] - data_x) / data_w).clamp(0.0, 1.0);
+    let t_ms = (pct as f64 * duration_ms as f64) as u64;
 
-    let p = &json.players[idx];
-    let dur = json.duration_ms;
+    let draw = ui.get_window_draw_list();
+    draw.add_line([mouse[0], top_y], [mouse[0], bottom_y], [1.0, 1.0, 1.0, 0.35])
+        .thickness(1.0).build();
 
+    // Build tooltip rows.
+    let sample_idx = |arr_len: usize| -> Option<usize> {
+        if arr_len == 0 { None } else { Some(((pct * (arr_len - 1).max(0) as f32) as usize).min(arr_len - 1)) }
+    };
+    let mut rows: Vec<(&'static str, [f32; 4], String)> = Vec::new();
     if layers.health {
-        let samples: Vec<f32> = sample_health_per_second(p, dur).into_iter().map(|x| x as f32).collect();
-        draw_area_lane(ui, "Health", COLOR_HEALTH, &samples, 100.0);
+        if let Some(i) = sample_idx(health.len()) {
+            rows.push(("Health", COLOR_HEALTH, format!("{:.0}%", health[i])));
+        }
     }
     if layers.damage_dealt {
-        let v: Vec<f32> = extract_damage_dealt(p).into_iter().map(|x| x as f32).collect();
-        draw_area_lane_auto(ui, "Dmg Dealt", COLOR_DMG, &v);
+        if let Some(i) = sample_idx(dmg_dealt.len()) {
+            rows.push(("Dmg Dealt", COLOR_DMG, short_value(dmg_dealt[i])));
+        }
     }
     if layers.damage_taken {
-        let v: Vec<f32> = extract_damage_taken(p).into_iter().map(|x| x as f32).collect();
-        draw_area_lane_auto(ui, "Dmg Taken", COLOR_TAKEN, &v);
+        if let Some(i) = sample_idx(dmg_taken.len()) {
+            rows.push(("Dmg Taken", COLOR_TAKEN, short_value(dmg_taken[i])));
+        }
     }
-    if layers.distance_to_tag {
-        let samples = distance_to_commander_per_second(json, idx, dur);
-        if samples.is_empty() {
-            draw_empty_lane(ui, "Dist Tag", COLOR_DIST, "no commander tagged");
-        } else {
-            let v: Vec<f32> = samples.into_iter().map(|x| x as f32).collect();
-            draw_area_lane_auto(ui, "Dist Tag", COLOR_DIST, &v);
+    if layers.distance_to_tag && !distance.is_empty() {
+        if let Some(i) = sample_idx(distance.len()) {
+            rows.push(("Dist Tag", COLOR_DIST, format!("{:.0}", distance[i])));
         }
     }
     if layers.offensive_boons {
-        let series = offensive_boons(p, dur);
-        draw_boon_lane(ui, "Off Boons", COLOR_OFF, &series, dur);
+        let active: Vec<&str> = off.iter()
+            .filter(|s| s.segments.iter().any(|seg| seg.start_ms <= t_ms && t_ms < seg.end_ms))
+            .map(|s| s.name).collect();
+        let label = if active.is_empty() { "none".to_string() } else { active.join(", ") };
+        rows.push(("Off Boons", COLOR_OFF, label));
     }
     if layers.defensive_boons {
-        let series = defensive_boons(p, dur);
-        draw_boon_lane(ui, "Def Boons", COLOR_DEF, &series, dur);
+        let active: Vec<&str> = def.iter()
+            .filter(|s| s.segments.iter().any(|seg| seg.start_ms <= t_ms && t_ms < seg.end_ms))
+            .map(|s| s.name).collect();
+        let label = if active.is_empty() { "none".to_string() } else { active.join(", ") };
+        rows.push(("Def Boons", COLOR_DEF, label));
+    }
+
+    draw_tooltip(ui, mouse, t_ms, &rows, data_x, data_w);
+}
+
+fn draw_tooltip(
+    ui: &Ui,
+    mouse: [f32; 2],
+    t_ms: u64,
+    rows: &[(&'static str, [f32; 4], String)],
+    data_x: f32,
+    data_w: f32,
+) {
+    let line_h = ui.text_line_height();
+    let pad = 6.0;
+    let time_label = format_mmss(t_ms);
+    let mut max_value_w: f32 = 0.0;
+    let mut max_label_w: f32 = 0.0;
+    for (label, _, value) in rows {
+        max_label_w = max_label_w.max(ui.calc_text_size(*label)[0]);
+        max_value_w = max_value_w.max(ui.calc_text_size(value)[0]);
+    }
+    let dot_w = 6.0;
+    let row_gap = 4.0;
+    let inner_w = dot_w + 6.0 + max_label_w + 12.0 + max_value_w;
+    let header_w = ui.calc_text_size(&time_label)[0];
+    let w = (inner_w.max(header_w)) + pad * 2.0;
+    let h = pad + line_h + 4.0 + (rows.len() as f32) * (line_h + row_gap) + pad - row_gap;
+
+    // Position: 12px right of cursor by default; flip left if it would overflow.
+    let mut tx = mouse[0] + 12.0;
+    if tx + w > data_x + data_w { tx = mouse[0] - 12.0 - w; }
+    let ty = (mouse[1] - h * 0.5).max(0.0);
+
+    let draw = ui.get_window_draw_list();
+    draw.add_rect([tx, ty], [tx + w, ty + h], [0.05, 0.06, 0.08, 0.95])
+        .filled(true).rounding(6.0).build();
+    draw.add_rect([tx, ty], [tx + w, ty + h], [1.0, 1.0, 1.0, 0.10])
+        .rounding(6.0).build();
+
+    let mut y = ty + pad;
+    draw.add_text([tx + pad, y], TEXT_MUTED, &time_label);
+    y += line_h + 4.0;
+    for (label, color, value) in rows {
+        let dot_y = y + (line_h - dot_w) * 0.5;
+        draw.add_rect([tx + pad, dot_y], [tx + pad + dot_w, dot_y + dot_w], *color)
+            .filled(true).rounding(2.0).build();
+        draw.add_text([tx + pad + dot_w + 6.0, y], TEXT_SECONDARY, *label);
+        let vw = ui.calc_text_size(value)[0];
+        draw.add_text([tx + w - pad - vw, y], TEXT_PRIMARY, value.as_str());
+        y += line_h + row_gap;
     }
 }
 
