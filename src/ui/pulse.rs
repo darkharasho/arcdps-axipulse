@@ -853,7 +853,10 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
         px += pill_w + pad_between;
     }
     if let Ok(mut g) = COMP_SELECTED.lock() { *g = selected.clone(); }
-    ui.dummy([avail, pill_h]);
+    // Park the cursor exactly at the bottom of the pill row. Skipping
+    // `ui.dummy(...)` here avoids stacking the auto ItemSpacing on top
+    // of the row's natural height when chips render next.
+    ui.set_cursor_screen_pos([cursor[0], py + pill_h + 2.0]);
 
     // Expanded per-spec chips for the selected group.
     if let Some(key) = &selected {
