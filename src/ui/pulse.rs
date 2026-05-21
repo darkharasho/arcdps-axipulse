@@ -642,13 +642,12 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
         px += pill_w + pad_between;
     }
     if let Ok(mut g) = COMP_SELECTED.lock() { *g = selected.clone(); }
-    ui.dummy([avail, pill_h + 4.0]);
+    ui.dummy([avail, pill_h]);
 
     // Expanded per-spec chips for the selected group.
     if let Some(key) = &selected {
         if let Some(g) = groups.iter().find(|g| &g.key == key) {
             if !g.class_counts.is_empty() {
-                ui.dummy([0.0, 2.0]);
                 draw_class_chips(ui, &g.class_counts, g.color);
             }
         }
