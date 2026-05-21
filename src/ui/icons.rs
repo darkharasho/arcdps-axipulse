@@ -152,15 +152,52 @@ static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache {
 }));
 
 type DownloadResult = (IconKey, Result<Vec<u8>, String>);
+type DownloadRequest = (IconKey, String, Option<PathBuf>);
 
 struct Chan {
+    /// Completed downloads, drained on the imgui thread to upload SRVs.
     tx: Sender<DownloadResult>,
     rx: Mutex<Receiver<DownloadResult>>,
+    /// Requests queued for the single worker thread.
+    req_tx: Sender<DownloadRequest>,
 }
 
+/// Upper bound on D3D11 uploads per imgui frame. Big fights can yield
+/// 100+ unmet skill IDs at once; cramming them all into one frame has
+/// crashed the host under Wine. Spreading them across frames keeps the
+/// GPU load steady.
+const MAX_UPLOADS_PER_FRAME: usize = 4;
+
 static CHAN: Lazy<Chan> = Lazy::new(|| {
-    let (tx, rx) = mpsc::channel();
-    Chan { tx, rx: Mutex::new(rx) }
+    let (tx, rx) = mpsc::channel::<DownloadResult>();
+    let (req_tx, req_rx) = mpsc::channel::<DownloadRequest>();
+    // Single dedicated worker thread runs all HTTP fetches in serial.
+    // Replaces the previous "thread::spawn per icon" model which fanned
+    // out hundreds of threads at once on big fights.
+    let result_tx = tx.clone();
+    thread::Builder::new()
+        .name("axipulse-icon-worker".into())
+        .spawn(move || {
+            for (key, url, path) in req_rx {
+                match ureq::get(&url).timeout(std::time::Duration::from_secs(20)).call() {
+                    Ok(resp) => {
+                        let mut bytes: Vec<u8> = Vec::new();
+                        if let Err(e) = std::io::copy(&mut resp.into_reader(), &mut bytes) {
+                            let _ = result_tx.send((key, Err(e.to_string())));
+                            continue;
+                        }
+                        if let Some(p) = path {
+                            if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
+                            let _ = std::fs::write(&p, &bytes);
+                        }
+                        let _ = result_tx.send((key, Ok(bytes)));
+                    }
+                    Err(e) => { let _ = result_tx.send((key, Err(e.to_string()))); }
+                }
+            }
+        })
+        .ok();
+    Chan { tx, rx: Mutex::new(rx), req_tx }
 });
 
 /// Look up an icon by `(kind, id)`. Returns `Some` once the texture has
@@ -202,46 +239,30 @@ pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
             }
         }
     }
-
-    let tx = CHAN.tx.clone();
-    let path_clone = path;
-    thread::Builder::new()
-        .name("axipulse-icon".into())
-        .spawn(move || {
-            match ureq::get(&url).timeout(std::time::Duration::from_secs(20)).call() {
-                Ok(resp) => {
-                    let mut bytes: Vec<u8> = Vec::new();
-                    if let Err(e) = std::io::copy(&mut resp.into_reader(), &mut bytes) {
-                        let _ = tx.send((key, Err(e.to_string())));
-                        return;
-                    }
-                    if let Some(p) = path_clone {
-                        if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
-                        let _ = std::fs::write(&p, &bytes);
-                    }
-                    let _ = tx.send((key, Ok(bytes)));
-                }
-                Err(e) => { let _ = tx.send((key, Err(e.to_string()))); }
-            }
-        })
-        .ok();
-
+    // Route through the single download worker; one HTTP fetch in flight
+    // at a time. Avoids spawning hundreds of threads when a big fight lands.
+    let _ = CHAN.req_tx.send((key, url, path));
     None
 }
 
 /// Process any completed downloads. Must be called from the imgui
 /// thread (the only place we can safely touch the D3D11 device).
+/// Bounded to `MAX_UPLOADS_PER_FRAME` to keep GPU work steady — Wine
+/// has crashed when too many SRVs are created in a single frame.
 pub fn drain_pending() {
     let device = match arcdps::d3d11_device() {
         Some(d) => d,
         None => return,
     };
     let Ok(rx) = CHAN.rx.lock() else { return };
+    let mut uploaded = 0usize;
     loop {
+        if uploaded >= MAX_UPLOADS_PER_FRAME { break; }
         let (key, result) = match rx.try_recv() {
             Ok(v) => v,
             Err(_) => break,
         };
+        uploaded += 1;
         let new_state = match result {
             Ok(bytes) => match unsafe { upload(&device, &bytes) } {
                 Ok((srv, aspect)) => {
