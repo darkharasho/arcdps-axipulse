@@ -16,6 +16,8 @@ pub mod top_skills;
 #[cfg(windows)]
 pub mod plugin;
 #[cfg(windows)]
+pub mod ui;
+#[cfg(windows)]
 pub mod watcher;
 
 #[cfg(windows)]
