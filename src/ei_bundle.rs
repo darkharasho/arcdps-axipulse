@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Version of EI bundled into this build. Bump when re-running
 /// `scripts/fetch_ei.sh`.
-pub const BUNDLED_EI_VERSION: &str = "0.0.0-replace-on-fetch";
+pub const BUNDLED_EI_VERSION: &str = "v3.22.0.0";
 
 /// Bytes of the bundled GW2EICLI.zip.
 pub const BUNDLED_EI_ZIP: &[u8] = include_bytes!("../vendor/GW2EICLI.zip");
