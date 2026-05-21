@@ -98,10 +98,15 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
 }
 
 /// Header row: AxiPulse logo + brand label + (when parsing) a pulsing
-/// indicator, then the fight picker dropdown below.
+/// indicator on the left, and the fight-picker combo right-aligned on
+/// the same line.
 fn render_header(ui: &Ui, state: &AppState) {
     let cursor = ui.cursor_screen_pos();
     let row_h = 28.0;
+    let avail = ui.content_region_avail()[0].max(200.0);
+    let combo_w = 280.0_f32.min(avail * 0.55);
+
+    // --- Left content (logo + wordmark + optional parsing indicator) ---
     let logo = crate::ui::icons::lookup_bundled("__logo__");
     let mut x = cursor[0];
     if let Some(handle) = logo {
@@ -121,15 +126,19 @@ fn render_header(ui: &Ui, state: &AppState) {
         draw.add_text([x + axi_w, brand_text_y], [0.31, 0.86, 0.61, 1.0], "Pulse");
     }
     let brand_end_x = x + axi_w + pulse_w;
-
     if crate::plugin::is_parsing() {
         render_parsing_pulse(ui, brand_end_x + 14.0, cursor[1] + row_h * 0.5, brand_text_y);
     }
 
-    // Advance ImGui's layout past the header decorations so the
-    // fight-picker combo lays out cleanly below.
-    ui.dummy([0.0, row_h]);
-    render_fight_picker(ui, state);
+    // --- Right-aligned fight picker on the same row ---
+    let combo_x = cursor[0] + avail - combo_w;
+    let combo_y = cursor[1] + (row_h - ui.frame_height_with_spacing()).max(0.0) * 0.5;
+    ui.set_cursor_screen_pos([combo_x, combo_y]);
+    ui.set_next_item_width(combo_w);
+    render_fight_picker_combo(ui, state);
+
+    // Park the cursor at the bottom of the row for downstream layout.
+    ui.set_cursor_screen_pos([cursor[0], cursor[1] + row_h]);
 }
 
 /// Heartbeat-style pulse: two quick blips then a rest, riffing on the
@@ -171,8 +180,10 @@ fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32) {
 }
 
 /// Combo dropdown listing "Latest" + each entry in `AppState.history`,
-/// newest-history-first. Selecting an entry pins the view to that fight.
-fn render_fight_picker(ui: &Ui, state: &AppState) {
+/// newest-history-first. Selecting an entry pins the view to that
+/// fight. Caller positions and sizes the combo via `set_cursor_screen_pos`
+/// + `set_next_item_width` before calling.
+fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
     let mut sel = FIGHT_SEL.lock().ok().map(|g| *g).unwrap_or(FightSel::Latest);
     let history_len = state.history_len();
 
@@ -189,8 +200,6 @@ fn render_fight_picker(ui: &Ui, state: &AppState) {
     };
     labels.push(latest_label);
     for offset in 0..history_len {
-        // Newest history entry is at index `history_len - 1`; iterate
-        // backwards so the combo lists most-recent-historical first.
         let i = history_len - 1 - offset;
         if let Some(rec) = state.history(i) {
             labels.push(format!(
@@ -205,20 +214,15 @@ fn render_fight_picker(ui: &Ui, state: &AppState) {
 
     let mut current_idx: usize = match sel {
         FightSel::Latest => 0,
-        FightSel::History(i) if i < history_len => history_len - i, // combo offset
+        FightSel::History(i) if i < history_len => history_len - i,
         _ => 0,
     };
 
-    ui.text_colored(TEXT_SECONDARY, "Fight");
-    ui.same_line();
-    let avail = ui.content_region_avail()[0].max(120.0);
-    ui.set_next_item_width(avail);
     let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
     if ui.combo_simple_string("##fight-picker", &mut current_idx, &label_refs) {
         sel = if current_idx == 0 {
             FightSel::Latest
         } else {
-            // combo offset 1 → newest historical = history_len - 1
             let offset_from_newest = current_idx - 1;
             FightSel::History(history_len.saturating_sub(1).saturating_sub(offset_from_newest))
         };
