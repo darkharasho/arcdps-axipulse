@@ -1,8 +1,11 @@
 #![cfg(windows)]
-//! Filesystem watcher on the cbtlogs directory. Posts new .evtc/.zevtc
-//! paths to a callback after the file size has stabilised (i.e. arcdps
-//! is done writing).
+//! Filesystem watcher on the cbtlogs directory. Hands new `.zevtc`
+//! paths to a worker thread which calls back into the plugin. The
+//! split keeps EI subprocess spawns off the notify-receive path and
+//! ensures parses run serially even when many Create events fire in
+//! a burst.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -14,13 +17,29 @@ pub fn spawn_watcher<F>(cbtlogs_dir: PathBuf, on_log: F) -> std::io::Result<()>
 where
     F: Fn(PathBuf) + Send + 'static,
 {
+    let (tx_work, rx_work) = mpsc::channel::<PathBuf>();
+
+    // Worker: drains paths, awaits size stability, calls on_log. Serial.
+    thread::Builder::new()
+        .name("axipulse-parser".into())
+        .spawn(move || {
+            for path in rx_work {
+                if !await_stable(&path) {
+                    log::warn!("axipulse: log {path:?} never stabilised, skipping");
+                    continue;
+                }
+                on_log(path);
+            }
+        })?;
+
+    // Watcher: routes notify events. Only Create on `.zevtc`, deduped.
     thread::Builder::new()
         .name("axipulse-watcher".into())
-        .spawn(move || run(cbtlogs_dir, on_log))?;
+        .spawn(move || run(cbtlogs_dir, tx_work))?;
     Ok(())
 }
 
-fn run<F: Fn(PathBuf) + Send + 'static>(dir: PathBuf, on_log: F) {
+fn run(dir: PathBuf, tx_work: mpsc::Sender<PathBuf>) {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = match notify::recommended_watcher(tx) {
         Ok(w) => w,
@@ -32,23 +51,29 @@ fn run<F: Fn(PathBuf) + Send + 'static>(dir: PathBuf, on_log: F) {
     }
     log::warn!("axipulse watcher started on {dir:?}");
 
+    // arcdps fires Modify events continuously while a fight log is being
+    // written; reacting to those spawned EI subprocesses mid-combat under
+    // Wine, which was visible as game stutter. Restricting to Create on
+    // the finished `.zevtc` only triggers us once per fight.
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
     for res in rx {
         let Ok(event) = res else { continue };
-        if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) { continue; }
+        if !matches!(event.kind, EventKind::Create(_)) { continue; }
         for path in event.paths {
-            if !is_log_extension(&path) { continue; }
-            if !await_stable(&path) {
-                log::warn!("axipulse: log {path:?} never stabilised, skipping");
-                continue;
+            if !is_zevtc(&path) { continue; }
+            if !seen.insert(path.clone()) { continue; }
+            if tx_work.send(path).is_err() {
+                log::warn!("axipulse: parser worker gone, watcher exiting");
+                return;
             }
-            on_log(path);
         }
     }
 }
 
-fn is_log_extension(p: &Path) -> bool {
+fn is_zevtc(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("evtc") || e.eq_ignore_ascii_case("zevtc"))
+        .map(|e| e.eq_ignore_ascii_case("zevtc"))
         .unwrap_or(false)
 }
 
