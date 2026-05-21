@@ -128,6 +128,8 @@ fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
             None),
     ];
     draw_2col_card_grid(ui, &cells);
+    ui.dummy([0.0, 8.0]);
+    render_fight_composition(ui, json, idx);
 }
 
 fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
@@ -537,4 +539,141 @@ fn draw_boon_bar(ui: &Ui, id: i64, name: &str, frac: f32, label: &str, color: [f
 
     ui.set_cursor_screen_pos(cursor);
     ui.invisible_button(format!("##boon-{id}"), [avail, row_h]);
+}
+
+// --- fight composition card ----------------------------------------------
+
+static COMP_SELECTED: Lazy<Mutex<Option<crate::fight_composition::GroupKey>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::fight_composition::compute;
+    let groups = compute(json, idx);
+    if groups.is_empty() { return; }
+    let total: u32 = groups.iter().map(|g| g.count).sum();
+    if total == 0 { return; }
+
+    section_label(ui, "FIGHT COMPOSITION");
+
+    // Segmented bar — proportional widths, one colour per group.
+    let avail = ui.content_region_avail()[0].max(120.0);
+    let cursor = ui.cursor_screen_pos();
+    let bar_h = 10.0;
+    let draw = ui.get_window_draw_list();
+    draw.add_rect([cursor[0], cursor[1]], [cursor[0] + avail, cursor[1] + bar_h], BG_CARD)
+        .filled(true).rounding(5.0).build();
+    let mut x = cursor[0];
+    let seg_gap = 2.0;
+    let total_w = avail - seg_gap * (groups.len() as f32 - 1.0).max(0.0);
+    for g in &groups {
+        let w = total_w * (g.count as f32 / total as f32);
+        draw.add_rect([x, cursor[1]], [x + w, cursor[1] + bar_h], g.color)
+            .filled(true).rounding(3.0).build();
+        x += w + seg_gap;
+    }
+    ui.dummy([avail, bar_h + 4.0]);
+
+    // Legend pills — clickable; selecting one expands a per-class chip row.
+    let mut selected = COMP_SELECTED.lock().ok().and_then(|g| g.clone());
+    let pill_h = 22.0;
+    let pad_x = 8.0;
+    let pad_between = 6.0;
+    let cursor = ui.cursor_screen_pos();
+    let mut px = cursor[0];
+    let py = cursor[1];
+    for (i, g) in groups.iter().enumerate() {
+        let count_str = g.count.to_string();
+        let pct = format!("{}%", (g.count as f32 / total as f32 * 100.0).round() as i32);
+        let label_str = &g.label;
+        // Pill text: "<count> <label> <pct>" with internal padding around each token.
+        let count_w = ui.calc_text_size(&count_str)[0];
+        let label_w = ui.calc_text_size(label_str)[0];
+        let pct_w = ui.calc_text_size(&pct)[0];
+        let dot_w = 8.0;
+        let token_gap = 6.0;
+        let pill_w = pad_x + dot_w + token_gap + count_w + token_gap + label_w + token_gap + pct_w + pad_x;
+        // Wrap if next pill won't fit.
+        if i > 0 && (px + pill_w) > cursor[0] + avail {
+            px = cursor[0];
+            // Move down one pill row.
+            ui.dummy([0.0, pill_h + 4.0]);
+            // Reset draw cursor — we keep using absolute coords so just bump py.
+            // Easier: just continue rendering past available width with overflow OK for v1.
+            // ImGui will clip to the window.
+        }
+        let active = selected.as_ref() == Some(&g.key);
+        let bg = if active { [0.18, 0.22, 0.28, 1.0] } else { [0.10, 0.12, 0.16, 1.0] };
+        let border = if active { g.color } else { [1.0, 1.0, 1.0, 0.06] };
+        draw.add_rect([px, py], [px + pill_w, py + pill_h], bg)
+            .filled(true).rounding(11.0).build();
+        draw.add_rect([px, py], [px + pill_w, py + pill_h], border)
+            .rounding(11.0).build();
+        let dot_y = py + (pill_h - dot_w) * 0.5;
+        draw.add_rect([px + pad_x, dot_y], [px + pad_x + dot_w, dot_y + dot_w], g.color)
+            .filled(true).rounding(2.0).build();
+        let text_y = py + (pill_h - ui.text_line_height()) * 0.5;
+        let mut tx = px + pad_x + dot_w + token_gap;
+        draw.add_text([tx, text_y], TEXT_PRIMARY, &count_str);
+        tx += count_w + token_gap;
+        draw.add_text([tx, text_y], TEXT_SECONDARY, label_str);
+        tx += label_w + token_gap;
+        draw.add_text([tx, text_y], TEXT_MUTED, &pct);
+
+        // Hit-test
+        ui.set_cursor_screen_pos([px, py]);
+        if ui.invisible_button(format!("##comp-pill-{i}"), [pill_w, pill_h]) {
+            selected = if active { None } else { Some(g.key.clone()) };
+        }
+        px += pill_w + pad_between;
+    }
+    if let Ok(mut g) = COMP_SELECTED.lock() { *g = selected.clone(); }
+    ui.dummy([avail, pill_h + 4.0]);
+
+    // Expanded per-spec chips for the selected group.
+    if let Some(key) = &selected {
+        if let Some(g) = groups.iter().find(|g| &g.key == key) {
+            if !g.class_counts.is_empty() {
+                ui.dummy([0.0, 2.0]);
+                draw_class_chips(ui, &g.class_counts, g.color);
+            }
+        }
+    }
+}
+
+fn draw_class_chips(ui: &Ui, chips: &[(String, u32)], accent: [f32; 4]) {
+    let avail = ui.content_region_avail()[0].max(120.0);
+    let cursor = ui.cursor_screen_pos();
+    let chip_h = 20.0;
+    let pad_x = 6.0;
+    let gap = 4.0;
+    let draw = ui.get_window_draw_list();
+    let mut x = cursor[0];
+    let mut y = cursor[1];
+    let mut rows = 1u32;
+    for (i, (spec, count)) in chips.iter().enumerate() {
+        let count_str = count.to_string();
+        let spec_w = ui.calc_text_size(spec.as_str())[0];
+        let count_w = ui.calc_text_size(&count_str)[0];
+        let chip_w = pad_x + spec_w + 6.0 + count_w + pad_x;
+        if x + chip_w > cursor[0] + avail {
+            x = cursor[0];
+            y += chip_h + gap;
+            rows += 1;
+        }
+        draw.add_rect([x, y], [x + chip_w, y + chip_h], [0.10, 0.12, 0.16, 1.0])
+            .filled(true).rounding(4.0).build();
+        let mut border = accent; border[3] = 0.30;
+        draw.add_rect([x, y], [x + chip_w, y + chip_h], border)
+            .rounding(4.0).build();
+        let text_y = y + (chip_h - ui.text_line_height()) * 0.5;
+        draw.add_text([x + pad_x, text_y], accent, spec.as_str());
+        draw.add_text([x + pad_x + spec_w + 6.0, text_y], TEXT_PRIMARY, &count_str);
+        // Invisible for layout
+        ui.set_cursor_screen_pos([x, y]);
+        let _ = ui.invisible_button(format!("##chip-{i}"), [chip_w, chip_h]);
+        x += chip_w + gap;
+    }
+    let total_h = rows as f32 * chip_h + (rows.saturating_sub(1) as f32) * gap;
+    ui.set_cursor_screen_pos([cursor[0], cursor[1]]);
+    ui.dummy([avail, total_h]);
 }

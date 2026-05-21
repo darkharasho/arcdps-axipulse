@@ -134,21 +134,36 @@ fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[f32], max: 
     draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD).filled(true).rounding(4.0).build();
     draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD_BORDER).rounding(4.0).build();
 
-    if samples.len() >= 2 && max > 0.0 {
+    if samples.len() >= 1 && max > 0.0 {
+        // Render each sample as a single filled rectangle from the
+        // baseline up to the sample height. Adjacent rects share a
+        // vertical edge so there are no diagonal seams, eliminating
+        // the zigzag artifacts the two-triangle trapezoid fill caused
+        // under ImGui's anti-aliasing.
         let n = samples.len();
-        let mut fill = accent; fill[3] = 0.30;
-        let mut prev_x = data_x;
-        let mut prev_y = y + h - (samples[0] / max).clamp(0.0, 1.0) * (h - 4.0) - 2.0;
-        for i in 1..n {
-            let x = data_x + data_w * (i as f32 / (n - 1) as f32);
+        let mut fill = accent; fill[3] = 0.50;
+        let baseline = y + h - 2.0;
+        let step = data_w / n as f32;
+        for i in 0..n {
+            let x0 = data_x + step * i as f32;
+            let x1 = data_x + step * (i + 1) as f32;
             let v = (samples[i] / max).clamp(0.0, 1.0);
-            let yv = y + h - v * (h - 4.0) - 2.0;
-            // Fill trapezoid below curve via two triangles.
-            draw.add_triangle([prev_x, y + h], [x, y + h], [x, yv], fill).filled(true).build();
-            draw.add_triangle([prev_x, y + h], [x, yv], [prev_x, prev_y], fill).filled(true).build();
-            draw.add_line([prev_x, prev_y], [x, yv], accent).thickness(1.2).build();
-            prev_x = x;
-            prev_y = yv;
+            let top = y + h - v * (h - 4.0) - 2.0;
+            if baseline - top < 0.5 || x1 - x0 < 0.5 { continue; }
+            draw.add_rect([x0, top], [x1, baseline], fill).filled(true).build();
+        }
+        // Outline along the top of the column stack — draws as line
+        // segments between adjacent sample tops (no extra fill, no AA seams).
+        if n >= 2 {
+            for i in 1..n {
+                let xa = data_x + step * (i - 1) as f32 + step * 0.5;
+                let xb = data_x + step * i as f32 + step * 0.5;
+                let va = (samples[i - 1] / max).clamp(0.0, 1.0);
+                let vb = (samples[i]     / max).clamp(0.0, 1.0);
+                let ya = y + h - va * (h - 4.0) - 2.0;
+                let yb = y + h - vb * (h - 4.0) - 2.0;
+                draw.add_line([xa, ya], [xb, yb], accent).thickness(1.1).build();
+            }
         }
     }
     ui.dummy([avail, h + LANE_PAD_Y]);
