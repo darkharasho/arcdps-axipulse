@@ -26,4 +26,6 @@ arcdps::export! {
     sig: 0x4A1B0DBE,
     init: plugin::init,
     release: plugin::release,
+    imgui: plugin::imgui,
+    options_windows: plugin::options_windows,
 }

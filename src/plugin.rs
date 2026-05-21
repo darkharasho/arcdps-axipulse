@@ -68,6 +68,29 @@ pub fn release() {
     if let Ok(c) = G.config.lock() { c.save(); }
 }
 
+pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
+    if !not_loading { return; }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (state, mut config) = match (G.state.lock(), G.config.lock()) {
+            (Ok(s), Ok(c)) => (s, c),
+            _ => return,
+        };
+        crate::ui::pulse::render(ui, &state, &mut config);
+    }));
+}
+
+pub fn options_windows(ui: &arcdps::imgui::Ui, window_name: Option<&str>) -> bool {
+    if window_name.is_some() { return false; }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Ok(mut c) = G.config.lock() {
+            if crate::ui::options::render_window_checkboxes(ui, &mut c) {
+                c.save();
+            }
+        }
+    }));
+    false
+}
+
 fn on_new_log(path: PathBuf) {
     let install_root = match G.install_root.lock().ok().and_then(|g| g.clone()) {
         Some(r) => r,
