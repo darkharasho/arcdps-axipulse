@@ -57,7 +57,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     }
     let mut open = true;
     window.opened(&mut open).build(|| {
-        render_fight_picker(ui, state);
+        render_header(ui, state);
         ui.dummy([0.0, 2.0]);
 
         // Resolve selected fight. If selection is stale (e.g. history is
@@ -94,6 +94,33 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
 
     for tok in color_tokens { tok.pop(); }
     for tok in style_tokens { tok.pop(); }
+}
+
+/// Header row: AxiPulse logo + brand label + fight picker dropdown.
+fn render_header(ui: &Ui, state: &AppState) {
+    let cursor = ui.cursor_screen_pos();
+    let row_h = 28.0;
+    let logo = crate::ui::icons::lookup_bundled("__logo__");
+    let mut x = cursor[0];
+    if let Some(handle) = logo {
+        let icon_h = row_h - 6.0;
+        let icon_w = (icon_h * handle.aspect).max(1.0);
+        let y = cursor[1] + 3.0;
+        let draw = ui.get_window_draw_list();
+        draw.add_image(handle.tex, [x, y], [x + icon_w, y + icon_h]).build();
+        x += icon_w + 8.0;
+    }
+    let brand_text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+    {
+        let draw = ui.get_window_draw_list();
+        draw.add_text([x, brand_text_y], TEXT_PRIMARY, "Axi");
+        let axi_w = ui.calc_text_size("Axi")[0];
+        draw.add_text([x + axi_w, brand_text_y], [0.31, 0.86, 0.61, 1.0], "Pulse");
+    }
+    // Advance ImGui's layout past the header decorations so the
+    // fight-picker combo lays out cleanly below.
+    ui.dummy([0.0, row_h]);
+    render_fight_picker(ui, state);
 }
 
 /// Combo dropdown listing "Latest" + each entry in `AppState.history`,

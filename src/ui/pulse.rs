@@ -866,37 +866,62 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
 }
 
 fn draw_class_chips(ui: &Ui, chips: &[(String, u32)], accent: [f32; 4]) {
+    use crate::ui::icons::lookup_bundled;
     let avail = ui.content_region_avail()[0].max(120.0);
     let cursor = ui.cursor_screen_pos();
-    let chip_h = 20.0;
+    let chip_h = 22.0;
     let pad_x = 6.0;
     let gap = 4.0;
-    let draw = ui.get_window_draw_list();
+    let icon_gap = 4.0;
     let mut x = cursor[0];
     let mut y = cursor[1];
     let mut rows = 1u32;
-    for (i, (spec, count)) in chips.iter().enumerate() {
+
+    // Resolve icons first so we can measure widths accurately.
+    struct Chip<'a> {
+        spec: &'a str,
+        count_str: String,
+        spec_w: f32,
+        icon: Option<crate::ui::icons::IconHandle>,
+        chip_w: f32,
+    }
+    let icon_h = chip_h - 6.0;
+    let mut prepared: Vec<Chip> = Vec::with_capacity(chips.len());
+    for (spec, count) in chips {
+        let icon = lookup_bundled(spec.as_str());
         let count_str = count.to_string();
         let spec_w = ui.calc_text_size(spec.as_str())[0];
         let count_w = ui.calc_text_size(&count_str)[0];
-        let chip_w = pad_x + spec_w + 6.0 + count_w + pad_x;
-        if x + chip_w > cursor[0] + avail {
+        let icon_w = icon.map(|h| (icon_h * h.aspect).max(1.0) + icon_gap).unwrap_or(0.0);
+        let chip_w = pad_x + icon_w + spec_w + 6.0 + count_w + pad_x;
+        prepared.push(Chip { spec: spec.as_str(), count_str, spec_w, icon, chip_w });
+    }
+
+    let draw = ui.get_window_draw_list();
+    for (i, chip) in prepared.iter().enumerate() {
+        if x + chip.chip_w > cursor[0] + avail {
             x = cursor[0];
             y += chip_h + gap;
             rows += 1;
         }
-        draw.add_rect([x, y], [x + chip_w, y + chip_h], [0.10, 0.12, 0.16, 1.0])
+        draw.add_rect([x, y], [x + chip.chip_w, y + chip_h], [0.10, 0.12, 0.16, 1.0])
             .filled(true).rounding(4.0).build();
         let mut border = accent; border[3] = 0.30;
-        draw.add_rect([x, y], [x + chip_w, y + chip_h], border)
+        draw.add_rect([x, y], [x + chip.chip_w, y + chip_h], border)
             .rounding(4.0).build();
+        let mut text_x = x + pad_x;
+        if let Some(handle) = chip.icon {
+            let icon_w = (icon_h * handle.aspect).max(1.0);
+            let icon_y = y + (chip_h - icon_h) * 0.5;
+            draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
+            text_x += icon_w + icon_gap;
+        }
         let text_y = y + (chip_h - ui.text_line_height()) * 0.5;
-        draw.add_text([x + pad_x, text_y], accent, spec.as_str());
-        draw.add_text([x + pad_x + spec_w + 6.0, text_y], TEXT_PRIMARY, &count_str);
-        // Invisible for layout
+        draw.add_text([text_x, text_y], accent, chip.spec);
+        draw.add_text([text_x + chip.spec_w + 6.0, text_y], TEXT_PRIMARY, &chip.count_str);
         ui.set_cursor_screen_pos([x, y]);
-        let _ = ui.invisible_button(format!("##chip-{i}"), [chip_w, chip_h]);
-        x += chip_w + gap;
+        let _ = ui.invisible_button(format!("##chip-{i}"), [chip.chip_w, chip_h]);
+        x += chip.chip_w + gap;
     }
     let total_h = rows as f32 * chip_h + (rows.saturating_sub(1) as f32) * gap;
     ui.set_cursor_screen_pos([cursor[0], cursor[1]]);

@@ -30,6 +30,99 @@ use crate::ei_model::EiJson;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconKind { Skill, Buff }
 
+/// Static, stable string keys for assets bundled into the DLL via
+/// `include_bytes!`. Class names match GW2 elite-spec / profession
+/// display strings exactly (e.g. `"Firebrand"`, `"Guardian"`); the
+/// special key `"__logo__"` is the AxiPulse logo PNG.
+const BUNDLED_PNGS: &[(&str, &[u8])] = &[
+    ("__logo__",     include_bytes!("../assets/axipulse-logo.png")),
+    ("Amalgam",      include_bytes!("../assets/classes/Amalgam.png")),
+    ("Antiquary",    include_bytes!("../assets/classes/Antiquary.png")),
+    ("Berserker",    include_bytes!("../assets/classes/Berserker.png")),
+    ("Bladesworn",   include_bytes!("../assets/classes/Bladesworn.png")),
+    ("Catalyst",     include_bytes!("../assets/classes/Catalyst.png")),
+    ("Chronomancer", include_bytes!("../assets/classes/Chronomancer.png")),
+    ("Conduit",      include_bytes!("../assets/classes/Conduit.png")),
+    ("Daredevil",    include_bytes!("../assets/classes/Daredevil.png")),
+    ("Deadeye",      include_bytes!("../assets/classes/Deadeye.png")),
+    ("Dragonhunter", include_bytes!("../assets/classes/Dragonhunter.png")),
+    ("Druid",        include_bytes!("../assets/classes/Druid.png")),
+    ("Elementalist", include_bytes!("../assets/classes/Elementalist.png")),
+    ("Engineer",     include_bytes!("../assets/classes/Engineer.png")),
+    ("Evoker",       include_bytes!("../assets/classes/Evoker.png")),
+    ("Firebrand",    include_bytes!("../assets/classes/Firebrand.png")),
+    ("Galeshot",     include_bytes!("../assets/classes/Galeshot.png")),
+    ("Guardian",     include_bytes!("../assets/classes/Guardian.png")),
+    ("Harbinger",    include_bytes!("../assets/classes/Harbinger.png")),
+    ("Herald",       include_bytes!("../assets/classes/Herald.png")),
+    ("Holosmith",    include_bytes!("../assets/classes/Holosmith.png")),
+    ("Luminary",     include_bytes!("../assets/classes/Luminary.png")),
+    ("Mechanist",    include_bytes!("../assets/classes/Mechanist.png")),
+    ("Mesmer",       include_bytes!("../assets/classes/Mesmer.png")),
+    ("Mirage",       include_bytes!("../assets/classes/Mirage.png")),
+    ("Necromancer",  include_bytes!("../assets/classes/Necromancer.png")),
+    ("Paragon",      include_bytes!("../assets/classes/Paragon.png")),
+    ("Ranger",       include_bytes!("../assets/classes/Ranger.png")),
+    ("Reaper",       include_bytes!("../assets/classes/Reaper.png")),
+    ("Renegade",     include_bytes!("../assets/classes/Renegade.png")),
+    ("Revenant",     include_bytes!("../assets/classes/Revenant.png")),
+    ("Ritualist",    include_bytes!("../assets/classes/Ritualist.png")),
+    ("Scourge",      include_bytes!("../assets/classes/Scourge.png")),
+    ("Scrapper",     include_bytes!("../assets/classes/Scrapper.png")),
+    ("Soulbeast",    include_bytes!("../assets/classes/Soulbeast.png")),
+    ("Specter",      include_bytes!("../assets/classes/Specter.png")),
+    ("Spellbreaker", include_bytes!("../assets/classes/Spellbreaker.png")),
+    ("Tempest",      include_bytes!("../assets/classes/Tempest.png")),
+    ("Thief",        include_bytes!("../assets/classes/Thief.png")),
+    ("Troubadour",   include_bytes!("../assets/classes/Troubadour.png")),
+    ("Untamed",      include_bytes!("../assets/classes/Untamed.png")),
+    ("Vindicator",   include_bytes!("../assets/classes/Vindicator.png")),
+    ("Virtuoso",     include_bytes!("../assets/classes/Virtuoso.png")),
+    ("Warrior",      include_bytes!("../assets/classes/Warrior.png")),
+    ("Weaver",       include_bytes!("../assets/classes/Weaver.png")),
+    ("Willbender",   include_bytes!("../assets/classes/Willbender.png")),
+];
+
+static BUNDLED: Lazy<Mutex<HashMap<&'static str, BundledState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static BUNDLED_SRVS: Lazy<Mutex<Vec<ID3D11ShaderResourceView>>> =
+    Lazy::new(|| Mutex::new(Vec::new()));
+
+enum BundledState { Failed, Ready { ptr: usize, aspect: f32 } }
+
+/// Look up a bundled asset by its key (`&str` matched against the
+/// table). Loads on first call after a D3D11 device becomes
+/// available. Returns `None` while the device isn't ready or the key
+/// doesn't match a bundled asset.
+pub fn lookup_bundled(key: &str) -> Option<IconHandle> {
+    let static_key = BUNDLED_PNGS.iter().find(|(k, _)| *k == key).map(|(k, _)| *k)?;
+    {
+        let map = BUNDLED.lock().ok()?;
+        if let Some(state) = map.get(static_key) {
+            return match state {
+                BundledState::Ready { ptr, aspect } =>
+                    Some(IconHandle { tex: TextureId::new(*ptr), aspect: *aspect }),
+                _ => None,
+            };
+        }
+    }
+    let device = arcdps::d3d11_device()?;
+    let bytes = BUNDLED_PNGS.iter().find(|(k, _)| *k == static_key)?.1;
+    let new_state = match unsafe { upload(&device, bytes) } {
+        Ok((srv, aspect)) => {
+            let ptr = srv.as_raw() as usize;
+            if let Ok(mut s) = BUNDLED_SRVS.lock() { s.push(srv); }
+            BundledState::Ready { ptr, aspect }
+        }
+        Err(e) => {
+            log::warn!("axipulse bundled icon upload failed for {static_key}: {e}");
+            BundledState::Failed
+        }
+    };
+    if let Ok(mut m) = BUNDLED.lock() { m.insert(static_key, new_state); }
+    lookup_bundled(static_key)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IconKey { pub kind: IconKind, pub id: i64 }
 
