@@ -7,6 +7,7 @@ pub mod ei_model;
 pub mod ei_parser;
 pub mod ei_settings;
 pub mod pulse_metrics;
+pub mod self_identify;
 pub mod state;
 
 #[cfg(windows)]
