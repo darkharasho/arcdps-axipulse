@@ -252,7 +252,31 @@ fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {
     ui.text_colored([0.95, 0.75, 0.40, 1.0], "INCOMING STRIPS");
     ui.text(strips_in.to_string());
 }
-fn render_boons   (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("boons — Task 11"); }
+fn render_boons(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::boon_uptime::{collect_uptimes, BoonStacking};
+
+    let p = &json.players[idx];
+    let ups = collect_uptimes(p);
+    if ups.is_empty() {
+        ui.text_disabled("No boon uptimes recorded for this fight.");
+        return;
+    }
+    ui.text_disabled("BOON UPTIME");
+    for boon in &ups {
+        let (frac, label) = match boon.stacking {
+            BoonStacking::Intensity => {
+                let max_stacks = if boon.name == "Might" { 25.0 } else { 25.0 };
+                let f = (boon.uptime / max_stacks).clamp(0.0, 1.0) as f32;
+                (f, format!("{:.1} stacks", boon.uptime))
+            }
+            BoonStacking::Duration => {
+                let f = (boon.uptime / 100.0).clamp(0.0, 1.0) as f32;
+                (f, format!("{:.1}%", boon.uptime))
+            }
+        };
+        draw_boon_bar(ui, boon.name, frac, label, boon_color(boon.name));
+    }
+}
 
 fn format_damage(d: u64) -> String {
     if d >= 1_000_000 { format!("{:.1}M", d as f64 / 1_000_000.0) }
@@ -308,5 +332,59 @@ fn draw_skill_bar(ui: &Ui, name: &str, frac: f32, pct: f64, value: String) {
 
     ui.set_cursor_screen_pos(cursor);
     ui.invisible_button(format!("##sk-{}", name), [avail, row_h]);
+    ui.spacing();
+}
+
+fn boon_color(name: &str) -> [f32; 4] {
+    match name {
+        "Might"        => [0.91, 0.36, 0.23, 1.0],
+        "Fury"         => [0.91, 0.60, 0.23, 1.0],
+        "Quickness"    => [0.75, 0.42, 0.94, 1.0],
+        "Alacrity"     => [0.94, 0.42, 0.74, 1.0],
+        "Protection"   => [0.36, 0.61, 0.83, 1.0],
+        "Regeneration" => [0.29, 0.86, 0.50, 1.0],
+        "Vigor"        => [0.64, 0.90, 0.21, 1.0],
+        "Swiftness"    => [0.98, 0.80, 0.08, 1.0],
+        "Resistance"   => [0.77, 0.64, 0.35, 1.0],
+        "Stability"    => [0.96, 0.62, 0.04, 1.0],
+        "Aegis"        => [0.49, 0.83, 0.99, 1.0],
+        "Resolution"   => [0.65, 0.51, 0.91, 1.0],
+        "Retaliation"  => [0.98, 0.57, 0.20, 1.0],
+        _              => [0.55, 0.55, 0.62, 1.0],
+    }
+}
+
+fn draw_boon_bar(ui: &Ui, name: &str, frac: f32, label: String, color: [f32; 4]) {
+    let avail = ui.content_region_avail()[0].max(120.0);
+    let row_h = (ui.text_line_height() * 1.5).max(22.0);
+    let cursor = ui.cursor_screen_pos();
+    let draw = ui.get_window_draw_list();
+
+    draw.add_rect([cursor[0], cursor[1]],
+                  [cursor[0] + avail, cursor[1] + row_h],
+                  [0.10, 0.12, 0.15, 1.0])
+        .filled(true).rounding(4.0).build();
+
+    let bar_w = avail * frac.clamp(0.0, 1.0);
+    if bar_w > 0.5 {
+        let mut bc = color; bc[3] = 0.55;
+        draw.add_rect([cursor[0], cursor[1]],
+                      [cursor[0] + bar_w, cursor[1] + row_h], bc)
+            .filled(true).rounding(4.0).build();
+    }
+
+    let pad = 8.0;
+    let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+    draw.add_text([cursor[0] + pad + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
+    draw.add_text([cursor[0] + pad,        text_y],       color, name);
+
+    let label_w = ui.calc_text_size(&label)[0];
+    draw.add_text([cursor[0] + avail - pad - label_w + 1.0, text_y + 1.0],
+                  [0.0, 0.0, 0.0, 0.55], &label);
+    draw.add_text([cursor[0] + avail - pad - label_w,       text_y],
+                  [1.0, 1.0, 1.0, 0.97], &label);
+
+    ui.set_cursor_screen_pos(cursor);
+    ui.invisible_button(format!("##boon-{}", name), [avail, row_h]);
     ui.spacing();
 }
