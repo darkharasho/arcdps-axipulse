@@ -1,5 +1,6 @@
 //! arcdps_axipulse: post-fight personal performance overlay.
 
+pub mod boon_uptime;
 pub mod config;
 pub mod diag;
 pub mod ei_bundle;
