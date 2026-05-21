@@ -27,6 +27,18 @@ pub struct EiJson {
     pub targets: Vec<EiTarget>,
     #[serde(default)]
     pub combat_replay_meta_data: Option<EiReplayMeta>,
+    /// Skill ID (string-prefixed with `s`, e.g. `"s5535"`) → metadata.
+    /// EI emits this at the top level; `totalDamageDist[].name` is blank
+    /// in WvW logs so this is the authoritative source for display names.
+    #[serde(default)]
+    pub skill_map: HashMap<String, SkillMapEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillMapEntry {
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
