@@ -9,11 +9,21 @@ pub struct Config {
     /// Empty = autodetect under %USERPROFILE%\Documents\Guild Wars 2\addons\arcdps\arcdps.cbtlogs
     pub cbtlogs_path: String,
     pub debug_logging: bool,
+    /// Whether the Pulse window is currently rendered.
+    pub show_pulse: bool,
+    /// Last-known position of the Pulse window in screen coordinates.
+    /// None means "let ImGui pick the default on first frame".
+    pub pulse_pos: Option<(f32, f32)>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { cbtlogs_path: String::new(), debug_logging: false }
+        Self {
+            cbtlogs_path: String::new(),
+            debug_logging: false,
+            show_pulse: true,
+            pulse_pos: None,
+        }
     }
 }
 
