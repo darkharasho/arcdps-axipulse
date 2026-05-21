@@ -71,6 +71,7 @@ pub fn release() {
 pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
     if !not_loading { return; }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::ui::icons::drain_pending();
         let (state, mut config) = match (G.state.lock(), G.config.lock()) {
             (Ok(s), Ok(c)) => (s, c),
             _ => return,

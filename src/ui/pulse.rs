@@ -170,7 +170,7 @@ fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
         let frac = entry.damage as f32 / max as f32;
         let pct = if total > 0 { entry.damage as f64 / total as f64 * 100.0 } else { 0.0 };
         let name = resolve_skill_name(json, entry.id, &entry.name);
-        draw_skill_bar(ui, i, entry.id, &name, frac, pct, &format_damage(entry.damage));
+        draw_skill_bar(ui, json, i, entry.id, &name, frac, pct, &format_damage(entry.damage));
     }
 }
 
@@ -321,12 +321,13 @@ fn render_value_bars(
         let frac = *value as f32 / max as f32;
         let pct = if total > 0 { *value as f64 / total as f64 * 100.0 } else { 0.0 };
         let name = resolve_skill_name(json, *id, "");
-        draw_value_bar(ui, id_prefix, i, *id, &name, frac, pct, &format_damage(*value), bar_color);
+        draw_value_bar(ui, json, id_prefix, i, *id, &name, frac, pct, &format_damage(*value), bar_color);
     }
 }
 
 fn draw_value_bar(
     ui: &Ui,
+    json: &EiJson,
     id_prefix: &str,
     row_idx: usize,
     id: i64,
@@ -336,40 +337,55 @@ fn draw_value_bar(
     value: &str,
     bar_color: [f32; 4],
 ) {
+    use crate::ui::icons::{lookup, IconKey, IconKind};
     let avail = ui.content_region_avail()[0].max(120.0);
     let row_h = (ui.text_line_height() * 1.55).max(24.0);
     let cursor = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
 
-    draw.add_rect([cursor[0], cursor[1]],
-                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD)
-        .filled(true).rounding(5.0).build();
-    let bar_w = avail * frac.clamp(0.0, 1.0);
-    if bar_w > 0.5 {
+    let icon = lookup(json, IconKey { kind: IconKind::Skill, id });
+
+    {
+        let draw = ui.get_window_draw_list();
+
         draw.add_rect([cursor[0], cursor[1]],
-                      [cursor[0] + bar_w, cursor[1] + row_h], bar_color)
+                      [cursor[0] + avail, cursor[1] + row_h], BG_CARD)
             .filled(true).rounding(5.0).build();
-    }
-    draw.add_rect([cursor[0], cursor[1]],
-                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
-        .rounding(5.0).build();
+        let bar_w = avail * frac.clamp(0.0, 1.0);
+        if bar_w > 0.5 {
+            draw.add_rect([cursor[0], cursor[1]],
+                          [cursor[0] + bar_w, cursor[1] + row_h], bar_color)
+                .filled(true).rounding(5.0).build();
+        }
+        draw.add_rect([cursor[0], cursor[1]],
+                      [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
+            .rounding(5.0).build();
 
-    let pad = 10.0;
-    let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
-    draw.add_text([cursor[0] + pad + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
-    draw.add_text([cursor[0] + pad, text_y], TEXT_PRIMARY, name);
+        let pad_left = 6.0;
+        let mut text_x = cursor[0] + pad_left;
+        if let Some(handle) = icon {
+            let icon_h = row_h - 4.0;
+            let icon_w = (icon_h * handle.aspect).max(1.0);
+            let icon_y = cursor[1] + 2.0;
+            draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
+            text_x += icon_w + 6.0;
+        }
+        let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+        draw.add_text([text_x + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
+        draw.add_text([text_x, text_y], TEXT_PRIMARY, name);
 
-    let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
-    let val_w = ui.calc_text_size(value)[0];
-    let pct_w = ui.calc_text_size(&pct_label)[0];
-    draw.add_text([cursor[0] + avail - pad - val_w + 1.0, text_y + 1.0],
-                   [0.0, 0.0, 0.0, 0.55], value);
-    draw.add_text([cursor[0] + avail - pad - val_w, text_y], TEXT_PRIMARY, value);
-    if !pct_label.is_empty() {
-        draw.add_text(
-            [cursor[0] + avail - pad - val_w - 14.0 - pct_w, text_y],
-            TEXT_SECONDARY, &pct_label,
-        );
+        let pad_right = 10.0;
+        let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
+        let val_w = ui.calc_text_size(value)[0];
+        let pct_w = ui.calc_text_size(&pct_label)[0];
+        draw.add_text([cursor[0] + avail - pad_right - val_w + 1.0, text_y + 1.0],
+                       [0.0, 0.0, 0.0, 0.55], value);
+        draw.add_text([cursor[0] + avail - pad_right - val_w, text_y], TEXT_PRIMARY, value);
+        if !pct_label.is_empty() {
+            draw.add_text(
+                [cursor[0] + avail - pad_right - val_w - 14.0 - pct_w, text_y],
+                TEXT_SECONDARY, &pct_label,
+            );
+        }
     }
 
     ui.set_cursor_screen_pos(cursor);
@@ -443,7 +459,7 @@ fn render_boons(ui: &Ui, json: &EiJson, idx: usize) {
                 (f, format!("{:.1}%", boon.uptime))
             }
         };
-        draw_boon_bar(ui, boon.id, boon.name, frac, &label, boon_color(boon.name));
+        draw_boon_bar(ui, json, boon.id, boon.name, frac, &label, boon_color(boon.name));
     }
 }
 
@@ -596,6 +612,7 @@ fn draw_2col_card_grid(
 /// percentage, and right-aligned damage value.
 fn draw_skill_bar(
     ui: &Ui,
+    json: &EiJson,
     row_idx: usize,
     id: i64,
     name: &str,
@@ -603,46 +620,57 @@ fn draw_skill_bar(
     pct: f64,
     value: &str,
 ) {
+    use crate::ui::icons::{lookup, IconKey, IconKind};
     let avail = ui.content_region_avail()[0].max(120.0);
     let row_h = (ui.text_line_height() * 1.55).max(24.0);
     let cursor = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
+    let icon = lookup(json, IconKey { kind: IconKind::Skill, id });
 
-    draw.add_rect([cursor[0], cursor[1]],
-                  [cursor[0] + avail, cursor[1] + row_h],
-                  BG_CARD)
-        .filled(true).rounding(5.0).build();
+    {
+        let draw = ui.get_window_draw_list();
 
-    let bar_w = avail * frac.clamp(0.0, 1.0);
-    if bar_w > 0.5 {
-        let mut accent = ACCENT_DAMAGE; accent[3] = 0.55;
         draw.add_rect([cursor[0], cursor[1]],
-                      [cursor[0] + bar_w, cursor[1] + row_h], accent)
+                      [cursor[0] + avail, cursor[1] + row_h], BG_CARD)
             .filled(true).rounding(5.0).build();
+        let bar_w = avail * frac.clamp(0.0, 1.0);
+        if bar_w > 0.5 {
+            let mut accent = ACCENT_DAMAGE; accent[3] = 0.55;
+            draw.add_rect([cursor[0], cursor[1]],
+                          [cursor[0] + bar_w, cursor[1] + row_h], accent)
+                .filled(true).rounding(5.0).build();
+        }
+        draw.add_rect([cursor[0], cursor[1]],
+                      [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
+            .rounding(5.0).build();
+
+        let pad_left = 6.0;
+        let mut text_x = cursor[0] + pad_left;
+        if let Some(handle) = icon {
+            let icon_h = row_h - 4.0;
+            let icon_w = (icon_h * handle.aspect).max(1.0);
+            let icon_y = cursor[1] + 2.0;
+            draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
+            text_x += icon_w + 6.0;
+        }
+        let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+        draw.add_text([text_x + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
+        draw.add_text([text_x, text_y], TEXT_PRIMARY, name);
+
+        let pad_right = 10.0;
+        let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
+        let val_w = ui.calc_text_size(value)[0];
+        let pct_w = ui.calc_text_size(&pct_label)[0];
+        draw.add_text([cursor[0] + avail - pad_right - val_w + 1.0, text_y + 1.0],
+                       [0.0, 0.0, 0.0, 0.55], value);
+        draw.add_text([cursor[0] + avail - pad_right - val_w, text_y], TEXT_PRIMARY, value);
+        if !pct_label.is_empty() {
+            draw.add_text(
+                [cursor[0] + avail - pad_right - val_w - 14.0 - pct_w, text_y],
+                TEXT_SECONDARY, &pct_label,
+            );
+        }
     }
-    draw.add_rect([cursor[0], cursor[1]],
-                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
-        .rounding(5.0).build();
 
-    let pad = 10.0;
-    let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
-    draw.add_text([cursor[0] + pad + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
-    draw.add_text([cursor[0] + pad, text_y], TEXT_PRIMARY, name);
-
-    let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
-    let val_w = ui.calc_text_size(value)[0];
-    let pct_w = ui.calc_text_size(&pct_label)[0];
-    draw.add_text([cursor[0] + avail - pad - val_w + 1.0, text_y + 1.0],
-                   [0.0, 0.0, 0.0, 0.55], value);
-    draw.add_text([cursor[0] + avail - pad - val_w, text_y], TEXT_PRIMARY, value);
-    if !pct_label.is_empty() {
-        draw.add_text(
-            [cursor[0] + avail - pad - val_w - 14.0 - pct_w, text_y],
-            TEXT_SECONDARY, &pct_label,
-        );
-    }
-
-    // Use row index + id for a stable, unique ImGui ID even when names are blank.
     ui.set_cursor_screen_pos(cursor);
     ui.invisible_button(format!("##sk-{row_idx}-{id}"), [avail, row_h]);
 }
@@ -666,44 +694,59 @@ fn boon_color(name: &str) -> [f32; 4] {
     }
 }
 
-fn draw_boon_bar(ui: &Ui, id: i64, name: &str, frac: f32, label: &str, color: [f32; 4]) {
+fn draw_boon_bar(ui: &Ui, json: &EiJson, id: i64, name: &str, frac: f32, label: &str, color: [f32; 4]) {
+    use crate::ui::icons::{lookup, IconKey, IconKind};
     let avail = ui.content_region_avail()[0].max(120.0);
     let row_h = (ui.text_line_height() * 1.55).max(24.0);
     let cursor = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
+    let icon = lookup(json, IconKey { kind: IconKind::Buff, id });
 
-    draw.add_rect([cursor[0], cursor[1]],
-                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD)
-        .filled(true).rounding(5.0).build();
+    {
+        let draw = ui.get_window_draw_list();
 
-    let bar_w = avail * frac.clamp(0.0, 1.0);
-    if bar_w > 0.5 {
-        let mut bc = color; bc[3] = 0.55;
         draw.add_rect([cursor[0], cursor[1]],
-                      [cursor[0] + bar_w, cursor[1] + row_h], bc)
+                      [cursor[0] + avail, cursor[1] + row_h], BG_CARD)
             .filled(true).rounding(5.0).build();
+
+        let bar_w = avail * frac.clamp(0.0, 1.0);
+        if bar_w > 0.5 {
+            let mut bc = color; bc[3] = 0.55;
+            draw.add_rect([cursor[0], cursor[1]],
+                          [cursor[0] + bar_w, cursor[1] + row_h], bc)
+                .filled(true).rounding(5.0).build();
+        }
+        draw.add_rect([cursor[0], cursor[1]],
+                      [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
+            .rounding(5.0).build();
+
+        let pad_left = 6.0;
+        let mut text_x = cursor[0] + pad_left;
+        if let Some(handle) = icon {
+            let icon_h = row_h - 4.0;
+            let icon_w = (icon_h * handle.aspect).max(1.0);
+            let icon_y = cursor[1] + 2.0;
+            draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
+            text_x += icon_w + 6.0;
+        } else {
+            // No icon yet — keep the coloured accent stripe so the row
+            // still has a visual identity for the boon.
+            let stripe_w = 4.0;
+            draw.add_rect([cursor[0] + 2.0, cursor[1] + 6.0],
+                          [cursor[0] + 2.0 + stripe_w, cursor[1] + row_h - 6.0], color)
+                .filled(true).rounding(2.0).build();
+            text_x = cursor[0] + 14.0;
+        }
+        let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+        draw.add_text([text_x + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
+        draw.add_text([text_x, text_y], TEXT_PRIMARY, name);
+
+        let pad_right = 14.0;
+        let label_w = ui.calc_text_size(label)[0];
+        draw.add_text([cursor[0] + avail - pad_right - label_w + 1.0, text_y + 1.0],
+                       [0.0, 0.0, 0.0, 0.55], label);
+        draw.add_text([cursor[0] + avail - pad_right - label_w, text_y],
+                       TEXT_PRIMARY, label);
     }
-    draw.add_rect([cursor[0], cursor[1]],
-                  [cursor[0] + avail, cursor[1] + row_h], BG_CARD_BORDER)
-        .rounding(5.0).build();
-
-    // Coloured accent stripe on the left so the boon's identity colour stays present.
-    let stripe_w = 4.0;
-    draw.add_rect([cursor[0] + 2.0, cursor[1] + 6.0],
-                  [cursor[0] + 2.0 + stripe_w, cursor[1] + row_h - 6.0], color)
-        .filled(true).rounding(2.0).build();
-
-    let pad = 14.0;
-    let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
-    // Name in white for legibility regardless of boon colour.
-    draw.add_text([cursor[0] + pad + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], name);
-    draw.add_text([cursor[0] + pad, text_y], TEXT_PRIMARY, name);
-
-    let label_w = ui.calc_text_size(label)[0];
-    draw.add_text([cursor[0] + avail - pad - label_w + 1.0, text_y + 1.0],
-                   [0.0, 0.0, 0.0, 0.55], label);
-    draw.add_text([cursor[0] + avail - pad - label_w, text_y],
-                   TEXT_PRIMARY, label);
 
     ui.set_cursor_screen_pos(cursor);
     ui.invisible_button(format!("##boon-{id}"), [avail, row_h]);

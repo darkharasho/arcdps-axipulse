@@ -32,6 +32,9 @@ pub struct EiJson {
     /// in WvW logs so this is the authoritative source for display names.
     #[serde(default)]
     pub skill_map: HashMap<String, SkillMapEntry>,
+    /// Buff ID (string-prefixed with `b`, e.g. `"b740"`) → metadata.
+    #[serde(default)]
+    pub buff_map: HashMap<String, BuffMapEntry>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -39,6 +42,18 @@ pub struct EiJson {
 pub struct SkillMapEntry {
     #[serde(default)]
     pub name: String,
+    /// Absolute URL to a 64×64 PNG hosted on render.guildwars2.com.
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuffMapEntry {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

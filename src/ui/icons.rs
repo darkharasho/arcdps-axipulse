@@ -1,0 +1,213 @@
+#![cfg(windows)]
+//! Skill / buff icon texture cache.
+//!
+//! EI's `skillMap` and `buffMap` give us a URL per asset
+//! (render.guildwars2.com). On first sight of an ID we spawn a
+//! background fetch; once the bytes arrive (or hit the disk cache)
+//! the main imgui thread uploads them to a D3D11 texture and stores
+//! the SRV pointer for ImGui to consume as a `TextureId`. Lookups
+//! that are not yet ready return `None` and callers fall back to
+//! their text-only layout.
+
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Mutex;
+use std::thread;
+
+use arcdps::imgui::TextureId;
+use once_cell::sync::Lazy;
+use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Device, ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_SHADER_RESOURCE,
+    D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+
+use crate::ei_model::EiJson;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IconKind { Skill, Buff }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IconKey { pub kind: IconKind, pub id: i64 }
+
+#[derive(Clone, Copy)]
+pub struct IconHandle { pub tex: TextureId, pub aspect: f32 }
+
+enum State {
+    Pending,
+    Failed,
+    Ready { ptr: usize, aspect: f32 },
+}
+
+struct Cache {
+    by_key: HashMap<IconKey, State>,
+    /// We keep SRVs alive for the lifetime of the process; ImGui holds
+    /// raw pointers into these COM objects every frame.
+    _srvs: Vec<ID3D11ShaderResourceView>,
+}
+
+unsafe impl Send for Cache {}
+unsafe impl Sync for Cache {}
+
+static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache {
+    by_key: HashMap::new(),
+    _srvs: Vec::new(),
+}));
+
+type DownloadResult = (IconKey, Result<Vec<u8>, String>);
+
+struct Chan {
+    tx: Sender<DownloadResult>,
+    rx: Mutex<Receiver<DownloadResult>>,
+}
+
+static CHAN: Lazy<Chan> = Lazy::new(|| {
+    let (tx, rx) = mpsc::channel();
+    Chan { tx, rx: Mutex::new(rx) }
+});
+
+/// Look up an icon by `(kind, id)`. Returns `Some` once the texture has
+/// been uploaded; in the meantime kicks off a download/disk-load and
+/// returns `None` so the caller can fall back to a placeholder.
+pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
+    {
+        let cache = CACHE.lock().ok()?;
+        if let Some(state) = cache.by_key.get(&key) {
+            return match state {
+                State::Ready { ptr, aspect } =>
+                    Some(IconHandle { tex: TextureId::new(*ptr), aspect: *aspect }),
+                _ => None,
+            };
+        }
+    }
+    // First sighting — resolve URL.
+    let url = match key.kind {
+        IconKind::Skill => json.skill_map.get(&format!("s{}", key.id))
+            .and_then(|e| e.icon.clone()),
+        IconKind::Buff  => json.buff_map.get(&format!("b{}", key.id))
+            .and_then(|e| e.icon.clone()),
+    };
+    let url = match url {
+        Some(u) if !u.is_empty() => u,
+        _ => {
+            if let Ok(mut c) = CACHE.lock() { c.by_key.insert(key, State::Failed); }
+            return None;
+        }
+    };
+    if let Ok(mut c) = CACHE.lock() { c.by_key.insert(key, State::Pending); }
+
+    let path = disk_path(key);
+    if let Some(p) = path.as_ref() {
+        if p.exists() {
+            if let Ok(bytes) = std::fs::read(p) {
+                let _ = CHAN.tx.send((key, Ok(bytes)));
+                return None;
+            }
+        }
+    }
+
+    let tx = CHAN.tx.clone();
+    let path_clone = path;
+    thread::Builder::new()
+        .name("axipulse-icon".into())
+        .spawn(move || {
+            match ureq::get(&url).timeout(std::time::Duration::from_secs(20)).call() {
+                Ok(resp) => {
+                    let mut bytes: Vec<u8> = Vec::new();
+                    if let Err(e) = std::io::copy(&mut resp.into_reader(), &mut bytes) {
+                        let _ = tx.send((key, Err(e.to_string())));
+                        return;
+                    }
+                    if let Some(p) = path_clone {
+                        if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
+                        let _ = std::fs::write(&p, &bytes);
+                    }
+                    let _ = tx.send((key, Ok(bytes)));
+                }
+                Err(e) => { let _ = tx.send((key, Err(e.to_string()))); }
+            }
+        })
+        .ok();
+
+    None
+}
+
+/// Process any completed downloads. Must be called from the imgui
+/// thread (the only place we can safely touch the D3D11 device).
+pub fn drain_pending() {
+    let device = match arcdps::d3d11_device() {
+        Some(d) => d,
+        None => return,
+    };
+    let Ok(rx) = CHAN.rx.lock() else { return };
+    loop {
+        let (key, result) = match rx.try_recv() {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        let new_state = match result {
+            Ok(bytes) => match unsafe { upload(&device, &bytes) } {
+                Ok((srv, aspect)) => {
+                    let ptr = srv.as_raw() as usize;
+                    let mut c = match CACHE.lock() { Ok(c) => c, Err(_) => continue };
+                    c._srvs.push(srv);
+                    State::Ready { ptr, aspect }
+                }
+                Err(e) => {
+                    log::warn!("axipulse icon: upload failed for {:?}: {e}", key);
+                    State::Failed
+                }
+            },
+            Err(e) => {
+                log::warn!("axipulse icon: download failed for {:?}: {e}", key);
+                State::Failed
+            }
+        };
+        if let Ok(mut c) = CACHE.lock() { c.by_key.insert(key, new_state); }
+    }
+}
+
+fn disk_path(key: IconKey) -> Option<PathBuf> {
+    let root = std::env::var_os("LOCALAPPDATA")?;
+    let kind = match key.kind { IconKind::Skill => "skill", IconKind::Buff => "buff" };
+    let mut p = PathBuf::from(root);
+    p.push("Axipulse"); p.push("icons");
+    p.push(format!("{kind}_{}.png", key.id));
+    Some(p)
+}
+
+unsafe fn upload(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<(ID3D11ShaderResourceView, f32), Box<dyn std::error::Error>> {
+    let img = image::load_from_memory(bytes)?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let aspect = if h > 0 { w as f32 / h as f32 } else { 1.0 };
+    let pixels = img.into_raw();
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: w,
+        Height: h,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        ..Default::default()
+    };
+    let init_data = D3D11_SUBRESOURCE_DATA {
+        pSysMem: pixels.as_ptr() as *const c_void,
+        SysMemPitch: w * 4,
+        SysMemSlicePitch: 0,
+    };
+    let mut tex: Option<ID3D11Texture2D> = None;
+    device.CreateTexture2D(&desc, Some(&init_data), Some(&mut tex))?;
+    let tex = tex.ok_or("CreateTexture2D returned null")?;
+    let mut srv: Option<ID3D11ShaderResourceView> = None;
+    device.CreateShaderResourceView(&tex, None, Some(&mut srv))?;
+    let srv = srv.ok_or("CreateShaderResourceView returned null")?;
+    Ok((srv, aspect))
+}
