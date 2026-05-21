@@ -142,7 +142,39 @@ fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
          rank_in_squad(json, idx, RankMetric::DamageTaken));
     cell(ui, "DISTANCE TO TAG", if d_to_tag > 0.0 { format!("{:.0}", d_to_tag) } else { "—".into() }, None);
 }
-fn render_damage  (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("damage — Task 8"); }
+fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::pulse_metrics::*;
+    use crate::top_skills::top_damage;
+
+    let p = &json.players[idx];
+    let dmg = damage(p);
+    let dps_v = dps_value(p);
+    let dc = down_contribution(p);
+
+    ui.text_colored([0.92, 0.40, 0.40, 1.0], "TOTAL DAMAGE");
+    ui.text(format_damage(dmg));
+    ui.same_line();
+    ui.text_disabled(format!("({} DPS)", format_damage(dps_v)));
+    ui.spacing();
+
+    ui.text_colored([0.97, 0.45, 0.45, 1.0], "DOWN CONTRIBUTION");
+    ui.text(dc.to_string());
+    ui.separator();
+
+    let skills = top_damage(p, 8);
+    if skills.is_empty() {
+        ui.text_disabled("No skill damage recorded.");
+        return;
+    }
+    let max = skills.first().map(|e| e.damage).unwrap_or(1).max(1);
+    let total: u64 = skills.iter().map(|e| e.damage).sum();
+    ui.text_disabled("TOP SKILLS");
+    for entry in &skills {
+        let frac = entry.damage as f32 / max as f32;
+        let pct = if total > 0 { entry.damage as f64 / total as f64 * 100.0 } else { 0.0 };
+        draw_skill_bar(ui, &entry.name, frac, pct, format_damage(entry.damage));
+    }
+}
 fn render_support (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("support — Task 9"); }
 fn render_defense (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("defense — Task 10"); }
 fn render_boons   (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("boons — Task 11"); }
@@ -159,4 +191,47 @@ fn ordinal(n: u32) -> String {
     let suffix = if v >= 20 { s.get(v % 10).copied().unwrap_or("th") }
                  else { s.get(v).copied().unwrap_or("th") };
     format!("{n}{suffix}")
+}
+
+/// Full-width row: text label, percent overlay, damage right-aligned,
+/// behind a coloured backing bar.
+fn draw_skill_bar(ui: &Ui, name: &str, frac: f32, pct: f64, value: String) {
+    let avail = ui.content_region_avail()[0].max(120.0);
+    let row_h = (ui.text_line_height() * 1.5).max(22.0);
+    let cursor = ui.cursor_screen_pos();
+    let draw = ui.get_window_draw_list();
+
+    draw.add_rect([cursor[0], cursor[1]],
+                  [cursor[0] + avail, cursor[1] + row_h],
+                  [0.10, 0.12, 0.15, 1.0])
+        .filled(true).rounding(4.0).build();
+
+    let bar_w = avail * frac.clamp(0.0, 1.0);
+    if bar_w > 0.5 {
+        draw.add_rect([cursor[0], cursor[1]],
+                      [cursor[0] + bar_w, cursor[1] + row_h],
+                      [0.85, 0.30, 0.30, 0.55])
+            .filled(true).rounding(4.0).build();
+    }
+
+    let pad = 8.0;
+    let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+    let label = if name.is_empty() { "(unnamed skill)" } else { name };
+    draw.add_text([cursor[0] + pad + 1.0, text_y + 1.0], [0.0, 0.0, 0.0, 0.55], label);
+    draw.add_text([cursor[0] + pad, text_y], [1.0, 1.0, 1.0, 0.97], label);
+
+    let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
+    let val_w = ui.calc_text_size(&value)[0];
+    let pct_w = ui.calc_text_size(&pct_label)[0];
+    draw.add_text([cursor[0] + avail - pad - val_w, text_y], [1.0, 1.0, 1.0, 0.95], &value);
+    if !pct_label.is_empty() {
+        draw.add_text(
+            [cursor[0] + avail - pad - val_w - 12.0 - pct_w, text_y],
+            [0.85, 0.85, 0.85, 0.85], &pct_label,
+        );
+    }
+
+    ui.set_cursor_screen_pos(cursor);
+    ui.invisible_button(format!("##sk-{}", name), [avail, row_h]);
+    ui.spacing();
 }
