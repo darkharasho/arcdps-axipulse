@@ -156,9 +156,13 @@ fn draw_hover_crosshair(
     let pct = ((mouse[0] - data_x) / data_w).clamp(0.0, 1.0);
     let t_ms = (pct as f64 * duration_ms as f64) as u64;
 
-    let draw = ui.get_window_draw_list();
-    draw.add_line([mouse[0], top_y], [mouse[0], bottom_y], [1.0, 1.0, 1.0, 0.35])
-        .thickness(1.0).build();
+    {
+        // Scope the draw list so it is released before draw_tooltip
+        // (which re-acquires it) — imgui-rs panics if two are alive.
+        let draw = ui.get_window_draw_list();
+        draw.add_line([mouse[0], top_y], [mouse[0], bottom_y], [1.0, 1.0, 1.0, 0.35])
+            .thickness(1.0).build();
+    }
 
     // Build tooltip rows.
     let sample_idx = |arr_len: usize| -> Option<usize> {

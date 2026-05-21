@@ -555,71 +555,86 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
 
     section_label(ui, "FIGHT COMPOSITION");
 
+    let mut selected = COMP_SELECTED.lock().ok().and_then(|g| g.clone());
+
     // Segmented bar — proportional widths, one colour per group.
     let avail = ui.content_region_avail()[0].max(120.0);
-    let cursor = ui.cursor_screen_pos();
-    let bar_h = 10.0;
-    let draw = ui.get_window_draw_list();
-    draw.add_rect([cursor[0], cursor[1]], [cursor[0] + avail, cursor[1] + bar_h], BG_CARD)
-        .filled(true).rounding(5.0).build();
-    let mut x = cursor[0];
-    let seg_gap = 2.0;
-    let total_w = avail - seg_gap * (groups.len() as f32 - 1.0).max(0.0);
-    for g in &groups {
-        let w = total_w * (g.count as f32 / total as f32);
-        draw.add_rect([x, cursor[1]], [x + w, cursor[1] + bar_h], g.color)
-            .filled(true).rounding(3.0).build();
-        x += w + seg_gap;
-    }
-    ui.dummy([avail, bar_h + 4.0]);
-
-    // Legend pills — clickable; selecting one expands a per-class chip row.
-    let mut selected = COMP_SELECTED.lock().ok().and_then(|g| g.clone());
     let pill_h = 22.0;
     let pad_x = 8.0;
     let pad_between = 6.0;
+    {
+        // Scope the draw list so it releases before downstream helpers
+        // (draw_class_chips) re-acquire it — imgui-rs panics otherwise.
+        let cursor = ui.cursor_screen_pos();
+        let bar_h = 10.0;
+        let draw = ui.get_window_draw_list();
+        draw.add_rect([cursor[0], cursor[1]], [cursor[0] + avail, cursor[1] + bar_h], BG_CARD)
+            .filled(true).rounding(5.0).build();
+        let mut x = cursor[0];
+        let seg_gap = 2.0;
+        let total_w = avail - seg_gap * (groups.len() as f32 - 1.0).max(0.0);
+        for g in &groups {
+            let w = total_w * (g.count as f32 / total as f32);
+            draw.add_rect([x, cursor[1]], [x + w, cursor[1] + bar_h], g.color)
+                .filled(true).rounding(3.0).build();
+            x += w + seg_gap;
+        }
+        ui.dummy([avail, bar_h + 4.0]);
+
+        let cursor = ui.cursor_screen_pos();
+        let mut px = cursor[0];
+        let py = cursor[1];
+        for (i, g) in groups.iter().enumerate() {
+            let count_str = g.count.to_string();
+            let pct = format!("{}%", (g.count as f32 / total as f32 * 100.0).round() as i32);
+            let label_str = &g.label;
+            let count_w = ui.calc_text_size(&count_str)[0];
+            let label_w = ui.calc_text_size(label_str)[0];
+            let pct_w = ui.calc_text_size(&pct)[0];
+            let dot_w = 8.0;
+            let token_gap = 6.0;
+            let pill_w = pad_x + dot_w + token_gap + count_w + token_gap + label_w + token_gap + pct_w + pad_x;
+            if i > 0 && (px + pill_w) > cursor[0] + avail {
+                px = cursor[0];
+            }
+            let active = selected.as_ref() == Some(&g.key);
+            let bg = if active { [0.18, 0.22, 0.28, 1.0] } else { [0.10, 0.12, 0.16, 1.0] };
+            let border = if active { g.color } else { [1.0, 1.0, 1.0, 0.06] };
+            draw.add_rect([px, py], [px + pill_w, py + pill_h], bg)
+                .filled(true).rounding(11.0).build();
+            draw.add_rect([px, py], [px + pill_w, py + pill_h], border)
+                .rounding(11.0).build();
+            let dot_y = py + (pill_h - dot_w) * 0.5;
+            draw.add_rect([px + pad_x, dot_y], [px + pad_x + dot_w, dot_y + dot_w], g.color)
+                .filled(true).rounding(2.0).build();
+            let text_y = py + (pill_h - ui.text_line_height()) * 0.5;
+            let mut tx = px + pad_x + dot_w + token_gap;
+            draw.add_text([tx, text_y], TEXT_PRIMARY, &count_str);
+            tx += count_w + token_gap;
+            draw.add_text([tx, text_y], TEXT_SECONDARY, label_str);
+            tx += label_w + token_gap;
+            draw.add_text([tx, text_y], TEXT_MUTED, &pct);
+            px += pill_w + pad_between;
+        }
+    }
+
+    // Hit-test pass (no draw list acquisition; invisible_button is safe).
     let cursor = ui.cursor_screen_pos();
     let mut px = cursor[0];
     let py = cursor[1];
     for (i, g) in groups.iter().enumerate() {
         let count_str = g.count.to_string();
         let pct = format!("{}%", (g.count as f32 / total as f32 * 100.0).round() as i32);
-        let label_str = &g.label;
-        // Pill text: "<count> <label> <pct>" with internal padding around each token.
         let count_w = ui.calc_text_size(&count_str)[0];
-        let label_w = ui.calc_text_size(label_str)[0];
+        let label_w = ui.calc_text_size(&g.label)[0];
         let pct_w = ui.calc_text_size(&pct)[0];
         let dot_w = 8.0;
         let token_gap = 6.0;
         let pill_w = pad_x + dot_w + token_gap + count_w + token_gap + label_w + token_gap + pct_w + pad_x;
-        // Wrap if next pill won't fit.
         if i > 0 && (px + pill_w) > cursor[0] + avail {
             px = cursor[0];
-            // Move down one pill row.
-            ui.dummy([0.0, pill_h + 4.0]);
-            // Reset draw cursor — we keep using absolute coords so just bump py.
-            // Easier: just continue rendering past available width with overflow OK for v1.
-            // ImGui will clip to the window.
         }
         let active = selected.as_ref() == Some(&g.key);
-        let bg = if active { [0.18, 0.22, 0.28, 1.0] } else { [0.10, 0.12, 0.16, 1.0] };
-        let border = if active { g.color } else { [1.0, 1.0, 1.0, 0.06] };
-        draw.add_rect([px, py], [px + pill_w, py + pill_h], bg)
-            .filled(true).rounding(11.0).build();
-        draw.add_rect([px, py], [px + pill_w, py + pill_h], border)
-            .rounding(11.0).build();
-        let dot_y = py + (pill_h - dot_w) * 0.5;
-        draw.add_rect([px + pad_x, dot_y], [px + pad_x + dot_w, dot_y + dot_w], g.color)
-            .filled(true).rounding(2.0).build();
-        let text_y = py + (pill_h - ui.text_line_height()) * 0.5;
-        let mut tx = px + pad_x + dot_w + token_gap;
-        draw.add_text([tx, text_y], TEXT_PRIMARY, &count_str);
-        tx += count_w + token_gap;
-        draw.add_text([tx, text_y], TEXT_SECONDARY, label_str);
-        tx += label_w + token_gap;
-        draw.add_text([tx, text_y], TEXT_MUTED, &pct);
-
-        // Hit-test
         ui.set_cursor_screen_pos([px, py]);
         if ui.invisible_button(format!("##comp-pill-{i}"), [pill_w, pill_h]) {
             selected = if active { None } else { Some(g.key.clone()) };
