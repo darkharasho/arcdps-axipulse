@@ -11,6 +11,7 @@ pub mod pulse_metrics;
 pub mod self_identify;
 pub mod squad_rank;
 pub mod state;
+pub mod timeline_boons;
 pub mod timeline_buckets;
 pub mod timeline_distance;
 pub mod timeline_health;
