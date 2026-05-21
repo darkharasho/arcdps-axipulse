@@ -91,6 +91,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
             TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, &mut config.timeline_layers),
         }
         crate::ui::diag::trace("tab content returned");
+        crate::ui::diag::trace("closure last statement");
     });
     crate::ui::diag::trace("window.build closure exited");
 
