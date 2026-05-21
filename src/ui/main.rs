@@ -167,22 +167,23 @@ fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32) {
         let x0 = cx - half;
         let y0 = cy - half;
         // Soft halo behind so the beat reads even on a busy backdrop.
+        // Alpha-driven so it shrinks/expands with the beat.
         let halo_r = icon_size * 0.65 + 2.0 * intensity;
-        let halo_color = [0.31, 0.86, 0.61, 0.10 + 0.25 * intensity];
+        let halo_color = [0.31, 0.86, 0.61, 0.10 + 0.25 * intensity * alpha];
         draw.add_rect(
             [cx - halo_r, cy - halo_r],
             [cx + halo_r, cy + halo_r],
             halo_color,
         ).filled(true).rounding(halo_r).build();
-        // The icon was rasterised already coloured #50dba0; alpha tints
-        // it on top.
+        // No tint on the texture itself — the vendored imgui binding's
+        // image-tint path appears to crash the host under Wine when
+        // exercised. The icon was rasterised already coloured #50dba0
+        // so untinted is fine.
         draw.add_image(
             handle.tex,
             [x0, y0],
             [x0 + icon_size, y0 + icon_size],
-        )
-            .col([1.0, 1.0, 1.0, alpha])
-            .build();
+        ).build();
     } else {
         // Bundled icon not loaded yet (D3D11 device unavailable on the
         // first frame). Fall back to the simple dot so we still show
