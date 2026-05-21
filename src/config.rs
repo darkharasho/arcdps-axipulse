@@ -11,9 +11,36 @@ pub struct Config {
     pub debug_logging: bool,
     /// Whether the Pulse window is currently rendered.
     pub show_pulse: bool,
-    /// Last-known position of the Pulse window in screen coordinates.
-    /// None means "let ImGui pick the default on first frame".
     pub pulse_pos: Option<(f32, f32)>,
+    /// Whether the Timeline window is currently rendered.
+    pub show_timeline: bool,
+    pub timeline_pos: Option<(f32, f32)>,
+    /// Per-lane visibility toggles for the Timeline.
+    pub timeline_layers: TimelineLayers,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TimelineLayers {
+    pub health: bool,
+    pub damage_dealt: bool,
+    pub damage_taken: bool,
+    pub distance_to_tag: bool,
+    pub offensive_boons: bool,
+    pub defensive_boons: bool,
+}
+
+impl Default for TimelineLayers {
+    fn default() -> Self {
+        Self {
+            health: true,
+            damage_dealt: true,
+            damage_taken: true,
+            distance_to_tag: true,
+            offensive_boons: true,
+            defensive_boons: true,
+        }
+    }
 }
 
 impl Default for Config {
@@ -23,6 +50,9 @@ impl Default for Config {
             debug_logging: false,
             show_pulse: true,
             pulse_pos: None,
+            show_timeline: true,
+            timeline_pos: None,
+            timeline_layers: TimelineLayers::default(),
         }
     }
 }
