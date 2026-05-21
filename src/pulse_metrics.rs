@@ -5,8 +5,8 @@ use crate::ei_model::EiPlayer;
 
 pub fn damage(p: &EiPlayer) -> u64        { p.dps_all.get(0).map(|d| d.damage).unwrap_or(0) }
 pub fn dps_value(p: &EiPlayer) -> u64     { p.dps_all.get(0).map(|d| d.dps).unwrap_or(0) }
-pub fn breakbar_damage(p: &EiPlayer) -> u64 {
-    p.dps_all.get(0).map(|d| d.breakbar_damage).unwrap_or(0)
+pub fn breakbar_damage(p: &EiPlayer) -> f64 {
+    p.dps_all.get(0).map(|d| d.breakbar_damage).unwrap_or(0.0)
 }
 
 pub fn cleanses(p: &EiPlayer) -> u64 {

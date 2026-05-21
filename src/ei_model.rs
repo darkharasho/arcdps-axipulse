@@ -83,8 +83,10 @@ pub struct EiPlayer {
 pub struct DpsAll {
     pub damage: u64,
     pub dps: u64,
+    /// EI emits this as a float (e.g. `15.2`) — breakbar damage is
+    /// computed across fractional time slices, not whole hits.
     #[serde(default)]
-    pub breakbar_damage: u64,
+    pub breakbar_damage: f64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
