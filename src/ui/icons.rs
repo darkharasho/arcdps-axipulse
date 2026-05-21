@@ -88,40 +88,27 @@ static BUNDLED: Lazy<Mutex<HashMap<&'static str, BundledState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static BUNDLED_SRVS: Lazy<Mutex<Vec<ID3D11ShaderResourceView>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
+/// Ordered preload queue: drains 4 entries per imgui frame inside
+/// `drain_pending` so a fresh fight rendering ~40 class chips can't
+/// trigger 40 simultaneous `CreateTexture2D` calls. Spreading the
+/// uploads across ~12 frames keeps Wine's d3d11 path stable.
+static BUNDLED_PRELOAD: Lazy<Mutex<Vec<&'static str>>> = Lazy::new(|| {
+    Mutex::new(BUNDLED_PNGS.iter().map(|(k, _)| *k).collect())
+});
 
 enum BundledState { Failed, Ready { ptr: usize, aspect: f32 } }
 
-/// Look up a bundled asset by its key (`&str` matched against the
-/// table). Loads on first call after a D3D11 device becomes
-/// available. Returns `None` while the device isn't ready or the key
-/// doesn't match a bundled asset.
+/// Look up an already-uploaded bundled asset. The actual upload
+/// happens incrementally inside `drain_pending`; this function is a
+/// pure read and never touches D3D11.
 pub fn lookup_bundled(key: &str) -> Option<IconHandle> {
     let static_key = BUNDLED_PNGS.iter().find(|(k, _)| *k == key).map(|(k, _)| *k)?;
-    {
-        let map = BUNDLED.lock().ok()?;
-        if let Some(state) = map.get(static_key) {
-            return match state {
-                BundledState::Ready { ptr, aspect } =>
-                    Some(IconHandle { tex: TextureId::new(*ptr), aspect: *aspect }),
-                _ => None,
-            };
-        }
-    }
-    let device = arcdps::d3d11_device()?;
-    let bytes = BUNDLED_PNGS.iter().find(|(k, _)| *k == static_key)?.1;
-    let new_state = match unsafe { upload(&device, bytes) } {
-        Ok((srv, aspect)) => {
-            let ptr = srv.as_raw() as usize;
-            if let Ok(mut s) = BUNDLED_SRVS.lock() { s.push(srv); }
-            BundledState::Ready { ptr, aspect }
-        }
-        Err(e) => {
-            log::warn!("axipulse bundled icon upload failed for {static_key}: {e}");
-            BundledState::Failed
-        }
-    };
-    if let Ok(mut m) = BUNDLED.lock() { m.insert(static_key, new_state); }
-    lookup_bundled(static_key)
+    let map = BUNDLED.lock().ok()?;
+    map.get(static_key).and_then(|s| match s {
+        BundledState::Ready { ptr, aspect } =>
+            Some(IconHandle { tex: TextureId::new(*ptr), aspect: *aspect }),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -254,8 +241,38 @@ pub fn drain_pending() {
         Some(d) => d,
         None => return,
     };
-    let Ok(rx) = CHAN.rx.lock() else { return };
     let mut uploaded = 0usize;
+
+    // Step 1: drain a few entries from the bundled preload queue.
+    while uploaded < MAX_UPLOADS_PER_FRAME {
+        let key = match BUNDLED_PRELOAD.lock() {
+            Ok(mut q) => match q.pop() {
+                Some(k) => k,
+                None => break,
+            },
+            Err(_) => break,
+        };
+        let bytes = match BUNDLED_PNGS.iter().find(|(k, _)| *k == key).map(|(_, b)| *b) {
+            Some(b) => b,
+            None => continue,
+        };
+        let new_state = match unsafe { upload(&device, bytes) } {
+            Ok((srv, aspect)) => {
+                let ptr = srv.as_raw() as usize;
+                if let Ok(mut s) = BUNDLED_SRVS.lock() { s.push(srv); }
+                BundledState::Ready { ptr, aspect }
+            }
+            Err(e) => {
+                log::warn!("axipulse bundled icon upload failed for {key}: {e}");
+                BundledState::Failed
+            }
+        };
+        if let Ok(mut m) = BUNDLED.lock() { m.insert(key, new_state); }
+        uploaded += 1;
+    }
+
+    // Step 2: drain URL-fetched downloads with remaining budget.
+    let Ok(rx) = CHAN.rx.lock() else { return };
     loop {
         if uploaded >= MAX_UPLOADS_PER_FRAME { break; }
         let (key, result) = match rx.try_recv() {
