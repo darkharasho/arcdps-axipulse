@@ -110,9 +110,6 @@ pub struct ExtHealingStats {
     /// Per-second cumulative incoming healing — `[phase][sec]`.
     #[serde(default, rename = "healingReceived1S")]
     pub healing_received_1s: Vec<Vec<u64>>,
-    /// Per-second cumulative outgoing healing — `[phase][sec]`.
-    #[serde(default, rename = "alliedHealing1S")]
-    pub allied_healing_1s: Vec<Vec<u64>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -147,8 +144,6 @@ pub struct ExtBarrierStats {
     pub total_barrier_dist: Vec<Vec<BarrierDistEntry>>,
     #[serde(default, rename = "barrierReceived1S")]
     pub barrier_received_1s: Vec<Vec<u64>>,
-    #[serde(default, rename = "alliedBarrier1S")]
-    pub allied_barrier_1s: Vec<Vec<u64>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
