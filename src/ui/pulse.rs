@@ -175,7 +175,33 @@ fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
         draw_skill_bar(ui, &entry.name, frac, pct, format_damage(entry.damage));
     }
 }
-fn render_support (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("support — Task 9"); }
+fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::pulse_metrics::*;
+    use crate::squad_rank::{rank_in_squad, RankMetric};
+
+    let p = &json.players[idx];
+    let st = strips(p);
+    let cl = cleanses(p);
+    let cl_self = cleanse_self(p);
+
+    ui.text_colored([0.45, 0.85, 0.65, 1.0], "BOON STRIPS");
+    ui.text(st.to_string());
+    if let Some(r) = rank_in_squad(json, idx, RankMetric::Strips) {
+        ui.same_line();
+        ui.text_disabled(format!("· {} in squad", ordinal(r)));
+    }
+    ui.spacing();
+
+    ui.text_colored([0.45, 0.85, 0.65, 1.0], "CLEANSES");
+    ui.text(format!("{cl} ({cl_self} self)"));
+    if let Some(r) = rank_in_squad(json, idx, RankMetric::Cleanses) {
+        ui.same_line();
+        ui.text_disabled(format!("· {} in squad", ordinal(r)));
+    }
+    ui.separator();
+    ui.text_disabled("Per-skill heal / barrier breakdowns require the");
+    ui.text_disabled("arcdps healing addon — not wired in Pulse v1.");
+}
 fn render_defense (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("defense — Task 10"); }
 fn render_boons   (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("boons — Task 11"); }
 
