@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::ei_bundle::ei_cli_exe;
+use crate::ei_bundle::{dotnet_root, ei_cli_exe};
 use crate::ei_model::EiJson;
 use crate::ei_settings::{generate_ei_conf, EiSettings};
 
@@ -58,14 +58,19 @@ pub fn parse_log(
         .map_err(ParseError::SettingsWrite)?;
 
     let exe = ei_cli_exe(install_root);
-    let mut child = Command::new(&exe)
-        .arg("-c").arg(&conf_path)
+    let dotnet = dotnet_root(install_root);
+    let mut cmd = Command::new(&exe);
+    cmd.arg("-c").arg(&conf_path)
         .arg(log_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(ParseError::SubprocessSpawn)?;
+        .stderr(Stdio::piped());
+    // Point EI's apphost at our bundled .NET 8 instead of relying on the
+    // Wine prefix to have a system runtime installed.
+    if dotnet.join("dotnet.exe").exists() {
+        cmd.env("DOTNET_ROOT", &dotnet);
+    }
+    let mut child = cmd.spawn().map_err(ParseError::SubprocessSpawn)?;
 
     let timeout = Duration::from_secs(600);
     let output = match wait_with_timeout(&mut child, timeout) {

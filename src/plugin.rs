@@ -40,6 +40,11 @@ pub fn init() -> Result<(), Option<String>> {
     } else {
         log::warn!("axipulse init: EI installed at {install_root:?}");
     }
+    if let Err(e) = crate::ei_bundle::install_dotnet(&install_root) {
+        log::warn!("axipulse init: .NET extract failed: {e}; EI will not be able to run");
+    } else {
+        log::warn!("axipulse init: .NET 8 runtime installed at {:?}", crate::ei_bundle::dotnet_root(&install_root));
+    }
     if let Ok(mut slot) = G.install_root.lock() { *slot = Some(install_root); }
 
     let cbtlogs = match G.config.lock().ok().map(|c| c.cbtlogs_path.clone()).filter(|s| !s.is_empty()) {
