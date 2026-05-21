@@ -96,8 +96,67 @@ fn render_tab_strip(ui: &Ui) {
 }
 
 // Subview bodies — filled in across Tasks 7–11. Stubs print "TODO".
-fn render_overview(ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("overview — Task 7"); }
+fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::pulse_metrics::*;
+    use crate::squad_rank::{rank_in_squad, RankMetric};
+
+    let p = &json.players[idx];
+    let dmg = damage(p);
+    let dps_v = dps_value(p);
+    let dc = down_contribution(p);
+    let cl = cleanses(p);
+    let st = strips(p);
+    let dt = damage_taken(p);
+    let d_to_tag = dist_to_tag(p);
+    let deaths_n = deaths(p);
+    let downs_n = downs(p);
+
+    ui.text_colored([0.92, 0.40, 0.40, 1.0], "DAMAGE DEALT");
+    ui.text(format_damage(dmg));
+    ui.same_line();
+    ui.text_disabled(format!("({} DPS)", format_damage(dps_v)));
+    if let Some(r) = rank_in_squad(json, idx, RankMetric::Damage) {
+        ui.same_line();
+        ui.text_disabled(format!("· {} in squad", ordinal(r)));
+    }
+    ui.separator();
+
+    let cell = |ui: &Ui, label: &str, value: String, rank: Option<u32>| {
+        ui.text_colored([0.65, 0.65, 0.72, 1.0], label);
+        ui.text(value);
+        if let Some(r) = rank {
+            ui.same_line();
+            ui.text_disabled(format!("· {} in squad", ordinal(r)));
+        }
+        ui.spacing();
+    };
+
+    cell(ui, "DOWN CONTRIBUTION", dc.to_string(),
+         rank_in_squad(json, idx, RankMetric::DownContribution));
+    cell(ui, "DEATHS / DOWNS", format!("{deaths_n} / {downs_n}"), None);
+    cell(ui, "STRIPS", st.to_string(),
+         rank_in_squad(json, idx, RankMetric::Strips));
+    cell(ui, "CLEANSES", cl.to_string(),
+         rank_in_squad(json, idx, RankMetric::Cleanses));
+    cell(ui, "DAMAGE TAKEN", format_damage(dt),
+         rank_in_squad(json, idx, RankMetric::DamageTaken));
+    cell(ui, "DISTANCE TO TAG", if d_to_tag > 0.0 { format!("{:.0}", d_to_tag) } else { "—".into() }, None);
+}
 fn render_damage  (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("damage — Task 8"); }
 fn render_support (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("support — Task 9"); }
 fn render_defense (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("defense — Task 10"); }
 fn render_boons   (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("boons — Task 11"); }
+
+fn format_damage(d: u64) -> String {
+    if d >= 1_000_000 { format!("{:.1}M", d as f64 / 1_000_000.0) }
+    else if d >= 1_000 { format!("{:.1}k", d as f64 / 1_000.0) }
+    else { format!("{d}") }
+}
+
+fn ordinal(n: u32) -> String {
+    let s = ["th","st","nd","rd"];
+    let v = (n % 100) as usize;
+    let suffix = if v >= 20 { s.get(v % 10).copied().unwrap_or("th") }
+                 else { s.get(v).copied().unwrap_or("th") };
+    format!("{n}{suffix}")
+}
