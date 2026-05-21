@@ -39,10 +39,13 @@ const GAP:    f32 = 8.0;
 
 /// Render the Pulse tab contents (no window — caller owns that).
 pub fn render_content(ui: &Ui, json: &EiJson, idx: usize) {
+    crate::ui::diag::trace("pulse::render_content begin");
     render_tab_strip(ui);
+    crate::ui::diag::trace("pulse tab strip done");
     ui.dummy([0.0, 4.0]);
 
     let subview = SUBVIEW.lock().ok().map(|g| *g).unwrap_or(Subview::Overview);
+    crate::ui::diag::trace(&format!("pulse subview: {subview:?}"));
     match subview {
         Subview::Overview => render_overview(ui, json, idx),
         Subview::Damage   => render_damage(ui, json, idx),
@@ -50,6 +53,7 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize) {
         Subview::Defense  => render_defense(ui, json, idx),
         Subview::Boons    => render_boons(ui, json, idx),
     }
+    crate::ui::diag::trace("pulse subview returned");
 }
 
 fn render_tab_strip(ui: &Ui) {
@@ -87,6 +91,7 @@ fn render_tab_strip(ui: &Ui) {
 fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
     use crate::pulse_metrics::*;
     use crate::squad_rank::{rank_in_squad, RankMetric};
+    crate::ui::diag::trace("overview begin");
 
     let p = &json.players[idx];
     let dmg = damage(p);
@@ -127,9 +132,12 @@ fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
             if d_to_tag > 0.0 { format!("{:.0}", d_to_tag) } else { "—".into() },
             None),
     ];
+    crate::ui::diag::trace("overview hero+cells data computed");
     draw_2col_card_grid(ui, &cells);
+    crate::ui::diag::trace("overview cells drawn");
     ui.dummy([0.0, 8.0]);
     render_fight_composition(ui, json, idx);
+    crate::ui::diag::trace("overview composition done");
 }
 
 fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
@@ -759,7 +767,9 @@ static COMP_SELECTED: Lazy<Mutex<Option<crate::fight_composition::GroupKey>>> =
 
 fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
     use crate::fight_composition::compute;
+    crate::ui::diag::trace("comp: compute");
     let groups = compute(json, idx);
+    crate::ui::diag::trace(&format!("comp: {} groups", groups.len()));
     if groups.is_empty() { return; }
     let total: u32 = groups.iter().map(|g| g.count).sum();
     if total == 0 { return; }
@@ -767,6 +777,7 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
     section_label(ui, "FIGHT COMPOSITION");
 
     let mut selected = COMP_SELECTED.lock().ok().and_then(|g| g.clone());
+    crate::ui::diag::trace("comp: about to draw bar+pills");
 
     // Segmented bar — proportional widths, one colour per group.
     let avail = ui.content_region_avail()[0].max(120.0);
@@ -853,6 +864,7 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
         px += pill_w + pad_between;
     }
     if let Ok(mut g) = COMP_SELECTED.lock() { *g = selected.clone(); }
+    crate::ui::diag::trace("comp: bar+pills+hit-test done");
     // Park the cursor exactly at the bottom of the pill row. Skipping
     // `ui.dummy(...)` here avoids stacking the auto ItemSpacing on top
     // of the row's natural height when chips render next.
@@ -862,7 +874,9 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
     if let Some(key) = &selected {
         if let Some(g) = groups.iter().find(|g| &g.key == key) {
             if !g.class_counts.is_empty() {
+                crate::ui::diag::trace(&format!("comp: drawing {} chips", g.class_counts.len()));
                 draw_class_chips(ui, &g.class_counts, g.color);
+                crate::ui::diag::trace("comp: chips done");
             }
         }
     }

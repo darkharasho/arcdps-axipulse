@@ -58,7 +58,9 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     }
     let mut open = true;
     window.opened(&mut open).build(|| {
+        crate::ui::diag::trace("window body begin");
         render_header(ui, state);
+        crate::ui::diag::trace("header done");
         ui.dummy([0.0, 2.0]);
 
         // Resolve selected fight. If selection is stale (e.g. history is
@@ -79,13 +81,16 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         };
 
         render_top_tabs(ui);
+        crate::ui::diag::trace("top tabs done");
         ui.dummy([0.0, 4.0]);
 
         let tab = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
+        crate::ui::diag::trace(&format!("tab dispatch: {:?}", tab));
         match tab {
             TopTab::Pulse    => crate::ui::pulse::render_content(ui, json, idx),
             TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, &mut config.timeline_layers),
         }
+        crate::ui::diag::trace("tab content returned");
     });
 
     if !open {

@@ -71,12 +71,17 @@ pub fn release() {
 pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
     if !not_loading { return; }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::ui::diag::tick();
+        crate::ui::diag::trace("imgui frame begin");
         crate::ui::icons::drain_pending();
+        crate::ui::diag::trace("after drain_pending");
         let (state, mut config) = match (G.state.lock(), G.config.lock()) {
             (Ok(s), Ok(c)) => (s, c),
             _ => return,
         };
+        crate::ui::diag::trace("locks acquired, entering main::render");
         crate::ui::main::render(ui, &state, &mut config);
+        crate::ui::diag::trace("main::render returned, imgui frame end");
     }));
 }
 
@@ -133,6 +138,10 @@ fn on_new_log(path: PathBuf) {
                 record.data.players.len(),
             );
             if let Ok(mut s) = G.state.lock() { s.push_fight(record); }
+            // Arm 120 frames (~2s @ 60fps) of trace output so we can
+            // pinpoint where the host crashes when a new fight first
+            // renders.
+            crate::ui::diag::arm(120);
         }
         Err(ParseError::SubprocessExit { code, stderr }) => {
             log::warn!("axipulse: parse failed (code={code:?}): {stderr}");

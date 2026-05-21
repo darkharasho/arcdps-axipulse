@@ -239,7 +239,7 @@ pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
 pub fn drain_pending() {
     let device = match arcdps::d3d11_device() {
         Some(d) => d,
-        None => return,
+        None => { crate::ui::diag::trace("drain: no d3d device"); return; }
     };
     let mut uploaded = 0usize;
 
@@ -271,6 +271,7 @@ pub fn drain_pending() {
         uploaded += 1;
     }
 
+    if uploaded > 0 { crate::ui::diag::trace(&format!("drain: bundled uploaded {uploaded}")); }
     // Step 2: drain URL-fetched downloads with remaining budget.
     let Ok(rx) = CHAN.rx.lock() else { return };
     loop {
