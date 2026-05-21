@@ -27,6 +27,9 @@ impl Default for EiSettings {
             anonymous: false,
             custom_too_short: 2200,
             save_out_html: false,
+            // Timeline plan will flip this to true — needed for player
+            // positions and the replay polling rate. Off here so Foundation
+            // parses stay fast and the JSON small.
             parse_combat_replay: false,
             raw_timeline_arrays: true,
             single_threaded: false,

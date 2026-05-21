@@ -38,14 +38,23 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// RAII guard: removes the temp dir on drop so every error path cleans up.
+struct WorkDir(PathBuf);
+
+impl Drop for WorkDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 pub fn parse_log(
     install_root: &Path,
     settings: &EiSettings,
     log_path: &Path,
 ) -> Result<EiJson, ParseError> {
-    let work = mktempdir(install_root).map_err(ParseError::SettingsWrite)?;
-    let conf_path = work.join("settings.conf");
-    fs::write(&conf_path, generate_ei_conf(settings, work.to_string_lossy().as_ref()))
+    let work = WorkDir(mktempdir(install_root).map_err(ParseError::SettingsWrite)?);
+    let conf_path = work.0.join("settings.conf");
+    fs::write(&conf_path, generate_ei_conf(settings, work.0.to_string_lossy().as_ref()))
         .map_err(ParseError::SettingsWrite)?;
 
     let exe = ei_cli_exe(install_root);
@@ -59,8 +68,7 @@ pub fn parse_log(
         .map_err(ParseError::SubprocessSpawn)?;
 
     let timeout = Duration::from_secs(600);
-    let result = wait_with_timeout(&mut child, timeout);
-    let output = match result {
+    let output = match wait_with_timeout(&mut child, timeout) {
         Some(o) => o,
         None => {
             let _ = child.kill();
@@ -71,28 +79,23 @@ pub fn parse_log(
         }
     };
     if !output.status.success() {
-        let _ = fs::remove_dir_all(&work);
         return Err(ParseError::SubprocessExit {
             code: output.status.code(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
 
-    let json_gz = fs::read_dir(&work)
+    let json_gz = fs::read_dir(&work.0)
         .map_err(ParseError::ReadOutput)?
         .flatten()
         .map(|e| e.path())
-        .find(|p| p.extension().and_then(|e| e.to_str()) == Some("gz"));
-    let json_gz = match json_gz {
-        Some(p) => p,
-        None => { let _ = fs::remove_dir_all(&work); return Err(ParseError::NoJsonOutput); }
-    };
+        .find(|p| p.extension().and_then(|e| e.to_str()) == Some("gz"))
+        .ok_or(ParseError::NoJsonOutput)?;
 
     let bytes = fs::read(&json_gz).map_err(ParseError::ReadOutput)?;
     let mut gz = flate2::read::GzDecoder::new(&bytes[..]);
     let mut decompressed = Vec::with_capacity(bytes.len() * 4);
     gz.read_to_end(&mut decompressed).map_err(ParseError::Gunzip)?;
-    let _ = fs::remove_dir_all(&work);
 
     serde_json::from_slice(&decompressed).map_err(ParseError::Deserialise)
 }
