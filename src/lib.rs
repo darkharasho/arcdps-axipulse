@@ -12,6 +12,7 @@ pub mod self_identify;
 pub mod squad_rank;
 pub mod state;
 pub mod timeline_buckets;
+pub mod timeline_health;
 pub mod top_skills;
 
 #[cfg(windows)]
