@@ -92,14 +92,18 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         }
         crate::ui::diag::trace("tab content returned");
     });
+    crate::ui::diag::trace("window.build closure exited");
 
     if !open {
         config.show_pulse = false;
         config.save();
     }
+    crate::ui::diag::trace("post-open check");
 
     for tok in color_tokens { tok.pop(); }
+    crate::ui::diag::trace("color tokens popped");
     for tok in style_tokens { tok.pop(); }
+    crate::ui::diag::trace("style tokens popped");
 }
 
 /// Header row: AxiPulse logo + brand label + (when parsing) a pulsing
@@ -131,16 +135,21 @@ fn render_header(ui: &Ui, state: &AppState) {
         draw.add_text([x + axi_w, brand_text_y], [0.31, 0.86, 0.61, 1.0], "Pulse");
     }
     let brand_end_x = x + axi_w + pulse_w;
-    if crate::plugin::is_parsing() {
+    let is_parsing = crate::plugin::is_parsing();
+    crate::ui::diag::trace(&format!("header: is_parsing={is_parsing}"));
+    if is_parsing {
         render_parsing_pulse(ui, brand_end_x + 14.0, cursor[1] + row_h * 0.5, brand_text_y);
+        crate::ui::diag::trace("header: parsing pulse drawn");
     }
 
     // --- Right-aligned fight picker on the same row ---
+    crate::ui::diag::trace("header: about to render combo");
     let combo_x = cursor[0] + avail - combo_w;
     let combo_y = cursor[1] + (row_h - ui.frame_height_with_spacing()).max(0.0) * 0.5;
     ui.set_cursor_screen_pos([combo_x, combo_y]);
     ui.set_next_item_width(combo_w);
     render_fight_picker_combo(ui, state);
+    crate::ui::diag::trace("header: combo done");
 
     // Park the cursor at the bottom of the row for downstream layout.
     ui.set_cursor_screen_pos([cursor[0], cursor[1] + row_h]);
