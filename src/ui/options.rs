@@ -13,5 +13,10 @@ pub fn render_window_checkboxes(ui: &Ui, config: &mut Config) -> bool {
         config.show_pulse = show;
         changed = true;
     }
+    let mut showt = config.show_timeline;
+    if ui.checkbox("Timeline", &mut showt) {
+        config.show_timeline = showt;
+        changed = true;
+    }
     changed
 }

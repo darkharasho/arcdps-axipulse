@@ -4,3 +4,4 @@
 
 pub mod options;
 pub mod pulse;
+pub mod timeline;
