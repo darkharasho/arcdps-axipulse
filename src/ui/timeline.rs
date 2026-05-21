@@ -1,17 +1,15 @@
 #![cfg(windows)]
-//! Timeline window — six stacked swim-lanes over the local player's
-//! last fight. Lanes are independently toggleable via the layer panel.
+//! Timeline tab content — six stacked swim-lanes + inspector cards.
+//! Outer window lives in `ui::main`.
 
-use arcdps::imgui::{Condition, StyleColor, StyleVar, Ui};
+use arcdps::imgui::Ui;
 
-use crate::config::Config;
 use crate::ei_model::EiJson;
-use crate::self_identify::find_self_index;
-use crate::state::AppState;
 
-const BG_WINDOW:     [f32; 4] = [0.055, 0.065, 0.085, 0.92];
 const BG_CARD:       [f32; 4] = [0.085, 0.10,  0.13,  0.95];
 const BG_CARD_BORDER:[f32; 4] = [1.0, 1.0, 1.0, 0.06];
+const TEXT_PRIMARY:  [f32; 4] = [0.97, 0.97, 1.00, 1.0];
+const TEXT_SECONDARY:[f32; 4] = [0.78, 0.78, 0.85, 1.0];
 const TEXT_MUTED:    [f32; 4] = [0.52, 0.54, 0.62, 1.0];
 
 const COLOR_HEALTH: [f32; 4] = [0.29, 0.86, 0.50, 1.0];
@@ -27,53 +25,19 @@ const AREA_LANE_H:  f32 = 48.0;
 const BOON_ROW_H:   f32 = 12.0;
 const BOON_GAP:     f32 = 2.0;
 
-pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
-    if !config.show_timeline { return; }
-
-    let style_tokens = [
-        ui.push_style_var(StyleVar::WindowPadding([12.0, 10.0])),
-        ui.push_style_var(StyleVar::WindowRounding(10.0)),
-        ui.push_style_var(StyleVar::WindowBorderSize(0.0)),
-        ui.push_style_var(StyleVar::ItemSpacing([8.0, 8.0])),
-    ];
-    let color_tokens = [
-        ui.push_style_color(StyleColor::WindowBg,      BG_WINDOW),
-        ui.push_style_color(StyleColor::TitleBg,       [0.055, 0.065, 0.085, 0.95]),
-        ui.push_style_color(StyleColor::TitleBgActive, [0.085, 0.10,  0.13,  0.95]),
-        ui.push_style_color(StyleColor::Separator,     [1.0, 1.0, 1.0, 0.06]),
-    ];
-
-    let mut window = ui.window("Timeline").size([720.0, 480.0], Condition::FirstUseEver);
-    if let Some(pos) = config.timeline_pos {
-        window = window.position([pos.0, pos.1], Condition::FirstUseEver);
-    }
-    let mut open = true;
-    window.opened(&mut open).build(|| {
-        let current = state.current();
-        if current.is_none() {
-            ui.text_disabled("Waiting for the first parsed fight\u{2026}");
-            return;
-        }
-        let record = current.unwrap();
-        let json = &record.data;
-        let Some(idx) = find_self_index(json) else {
-            ui.text_disabled("Could not identify local player in this fight.");
-            return;
-        };
-
-        render_layer_toggles(ui, &mut config.timeline_layers);
-        ui.separator();
-        render_time_axis(ui, json.duration_ms);
-        render_lanes(ui, json, idx, &config.timeline_layers);
-    });
-
-    if !open {
-        config.show_timeline = false;
-        config.save();
-    }
-
-    for tok in color_tokens { tok.pop(); }
-    for tok in style_tokens { tok.pop(); }
+/// Render the Timeline tab contents (no window — caller owns that).
+pub fn render_content(
+    ui: &Ui,
+    json: &EiJson,
+    idx: usize,
+    layers: &mut crate::config::TimelineLayers,
+) {
+    render_layer_toggles(ui, layers);
+    ui.separator();
+    render_time_axis(ui, json.duration_ms);
+    render_lanes(ui, json, idx, layers);
+    ui.dummy([0.0, 6.0]);
+    render_inspector(ui, json, idx);
 }
 
 fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
@@ -245,12 +209,129 @@ fn draw_boon_lane(
         }
         let name_w = ui.calc_text_size(s.name)[0];
         let nudge_y = (BOON_ROW_H - ui.text_line_height()).max(0.0) * 0.5;
+        // Drop-shadow + white label so the name reads on any backing colour.
+        draw.add_text(
+            [data_x + data_w - name_w - 4.0 + 1.0, row_y + nudge_y + 1.0],
+            [0.0, 0.0, 0.0, 0.55], s.name,
+        );
         draw.add_text(
             [data_x + data_w - name_w - 4.0, row_y + nudge_y],
-            accent, s.name,
+            TEXT_PRIMARY, s.name,
         );
     }
     ui.dummy([avail, h + LANE_PAD_Y]);
+}
+
+// --- inspector cards under the timeline ---------------------------------
+
+fn render_inspector(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::boon_uptime::collect_uptimes;
+    use crate::pulse_metrics::*;
+    use crate::timeline_distance::distance_to_commander_per_second;
+
+    let p = &json.players[idx];
+    let ending_hp = p.health_percents.last()
+        .and_then(|pair| pair.get(1).copied())
+        .unwrap_or(100.0);
+    let deaths_n = deaths(p);
+    let downs_n = downs(p);
+    let dmg_taken = damage_taken(p);
+
+    let boons = collect_uptimes(p);
+    let dist_samples = distance_to_commander_per_second(json, idx, json.duration_ms);
+    let (dist_avg, dist_max) = if dist_samples.is_empty() {
+        (None, None)
+    } else {
+        let sum: f64 = dist_samples.iter().sum();
+        let avg = sum / dist_samples.len() as f64;
+        let max = dist_samples.iter().copied().fold(0.0_f64, f64::max);
+        (Some(avg), Some(max))
+    };
+
+    section_label(ui, "INSPECTOR");
+
+    // 3-card row: Health & Survival, Boon Uptime, Position.
+    let avail = ui.content_region_avail()[0].max(300.0);
+    let gap = 8.0;
+    let col_w = (avail - gap * 2.0) / 3.0;
+    let card_h = 110.0;
+    let cursor = ui.cursor_screen_pos();
+    let start_x = cursor[0];
+    let start_y = cursor[1];
+
+    let health_lines = vec![
+        ("Ending HP", format!("{:.0}%", ending_hp), if ending_hp <= 0.0 { COLOR_DMG } else { COLOR_HEALTH }),
+        ("Deaths",    deaths_n.to_string(),         if deaths_n == 0 { COLOR_HEALTH } else { COLOR_DMG }),
+        ("Downs",     downs_n.to_string(),          if downs_n  == 0 { COLOR_HEALTH } else { COLOR_TAKEN }),
+        ("Dmg Taken", short_value(dmg_taken),       COLOR_TAKEN),
+    ];
+    draw_inspector_card(ui, start_x, start_y, col_w, card_h, "Health & Survival", COLOR_HEALTH, &health_lines);
+
+    let mut boon_lines: Vec<(&str, String, [f32; 4])> = Vec::new();
+    for b in &boons {
+        let label = match b.stacking {
+            crate::boon_uptime::BoonStacking::Intensity => format!("{:.1} st", b.uptime),
+            crate::boon_uptime::BoonStacking::Duration  => format!("{:.0}%", b.uptime),
+        };
+        boon_lines.push((b.name, label, COLOR_OFF));
+        if boon_lines.len() >= 4 { break; }
+    }
+    if boon_lines.is_empty() {
+        boon_lines.push(("(no boons)", "—".to_string(), TEXT_MUTED));
+    }
+    draw_inspector_card(ui, start_x + col_w + gap, start_y, col_w, card_h, "Boon Uptime", COLOR_OFF, &boon_lines);
+
+    let pos_lines = match (dist_avg, dist_max) {
+        (Some(a), Some(m)) => vec![
+            ("Avg distance", format!("{:.0}", a), COLOR_DIST),
+            ("Max distance", format!("{:.0}", m), COLOR_DIST),
+        ],
+        _ => vec![("Distance", "no tag".to_string(), TEXT_MUTED)],
+    };
+    draw_inspector_card(ui, start_x + (col_w + gap) * 2.0, start_y, col_w, card_h, "Position", COLOR_DIST, &pos_lines);
+
+    ui.dummy([avail, card_h]);
+}
+
+fn draw_inspector_card(
+    ui: &Ui,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    title: &str,
+    accent: [f32; 4],
+    lines: &[(&str, String, [f32; 4])],
+) {
+    let draw = ui.get_window_draw_list();
+    draw.add_rect([x, y], [x + w, y + h], BG_CARD).filled(true).rounding(6.0).build();
+    draw.add_rect([x, y], [x + w, y + h], BG_CARD_BORDER).rounding(6.0).build();
+    // Left accent stripe.
+    draw.add_rect([x, y + 8.0], [x + 3.0, y + h - 8.0], accent).filled(true).rounding(2.0).build();
+
+    let pad_x = 12.0;
+    let pad_y = 8.0;
+    let line_h = ui.text_line_height();
+    draw.add_text([x + pad_x, y + pad_y], accent, title);
+
+    let body_y0 = y + pad_y + line_h + 6.0;
+    let row_step = (h - (body_y0 - y) - pad_y) / (lines.len().max(1) as f32);
+    for (i, (label, value, color)) in lines.iter().enumerate() {
+        let row_y = body_y0 + (i as f32) * row_step;
+        draw.add_text([x + pad_x, row_y], TEXT_SECONDARY, *label);
+        let vw = ui.calc_text_size(value)[0];
+        draw.add_text([x + w - pad_x - vw, row_y], *color, value.as_str());
+    }
+}
+
+fn short_value(n: u64) -> String {
+    if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
+    else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
+    else { format!("{n}") }
+}
+
+fn section_label(ui: &Ui, label: &str) {
+    ui.text_colored(TEXT_MUTED, label);
 }
 
 fn format_mmss(ms: u64) -> String {

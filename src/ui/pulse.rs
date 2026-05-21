@@ -1,17 +1,14 @@
 #![cfg(windows)]
-//! Pulse window — five tabbed subviews showing the local player's
-//! last-fight metrics, styled as backing-card "stat cards" inspired by
-//! the AxiPulse desktop UI.
+//! Pulse tab content — five subviews (Overview/Damage/Support/Defense/
+//! Boons) rendered inside the unified AxiPulse window. The outer
+//! window + fight picker live in `ui::main`.
 
 use std::sync::Mutex;
 
-use arcdps::imgui::{Condition, StyleColor, StyleVar, Ui};
+use arcdps::imgui::{StyleColor, Ui};
 use once_cell::sync::Lazy;
 
-use crate::config::Config;
 use crate::ei_model::EiJson;
-use crate::self_identify::find_self_index;
-use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subview { Overview, Damage, Support, Defense, Boons }
@@ -40,65 +37,19 @@ const GAP:    f32 = 8.0;
 
 // --- entry point ---------------------------------------------------------
 
-pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
-    if !config.show_pulse { return; }
+/// Render the Pulse tab contents (no window — caller owns that).
+pub fn render_content(ui: &Ui, json: &EiJson, idx: usize) {
+    render_tab_strip(ui);
+    ui.dummy([0.0, 4.0]);
 
-    let style_tokens = [
-        ui.push_style_var(StyleVar::WindowPadding([14.0, 12.0])),
-        ui.push_style_var(StyleVar::WindowRounding(10.0)),
-        ui.push_style_var(StyleVar::WindowBorderSize(0.0)),
-        ui.push_style_var(StyleVar::FrameRounding(6.0)),
-        ui.push_style_var(StyleVar::ItemSpacing([8.0, 8.0])),
-    ];
-    let color_tokens = [
-        ui.push_style_color(StyleColor::WindowBg,      [0.055, 0.065, 0.085, 0.92]),
-        ui.push_style_color(StyleColor::TitleBg,       [0.055, 0.065, 0.085, 0.95]),
-        ui.push_style_color(StyleColor::TitleBgActive, [0.085, 0.10,  0.13,  0.95]),
-        ui.push_style_color(StyleColor::Separator,     [1.0, 1.0, 1.0, 0.06]),
-        ui.push_style_color(StyleColor::Button,        [0.10, 0.12, 0.16, 1.0]),
-        ui.push_style_color(StyleColor::ButtonHovered, [0.14, 0.17, 0.22, 1.0]),
-        ui.push_style_color(StyleColor::ButtonActive,  [0.18, 0.22, 0.28, 1.0]),
-    ];
-
-    let mut window = ui.window("Pulse").size([560.0, 540.0], Condition::FirstUseEver);
-    if let Some(pos) = config.pulse_pos {
-        window = window.position([pos.0, pos.1], Condition::FirstUseEver);
+    let subview = SUBVIEW.lock().ok().map(|g| *g).unwrap_or(Subview::Overview);
+    match subview {
+        Subview::Overview => render_overview(ui, json, idx),
+        Subview::Damage   => render_damage(ui, json, idx),
+        Subview::Support  => render_support(ui, json, idx),
+        Subview::Defense  => render_defense(ui, json, idx),
+        Subview::Boons    => render_boons(ui, json, idx),
     }
-    let mut open = true;
-    window.opened(&mut open).build(|| {
-        let current = state.current();
-        if current.is_none() {
-            ui.text_disabled("Waiting for the first parsed fight…");
-            return;
-        }
-        let record = current.unwrap();
-        let json = &record.data;
-
-        let Some(idx) = find_self_index(json) else {
-            ui.text_disabled("Could not identify local player in this fight.");
-            return;
-        };
-
-        render_tab_strip(ui);
-        ui.dummy([0.0, 4.0]);
-
-        let subview = SUBVIEW.lock().ok().map(|g| *g).unwrap_or(Subview::Overview);
-        match subview {
-            Subview::Overview => render_overview(ui, json, idx),
-            Subview::Damage   => render_damage(ui, json, idx),
-            Subview::Support  => render_support(ui, json, idx),
-            Subview::Defense  => render_defense(ui, json, idx),
-            Subview::Boons    => render_boons(ui, json, idx),
-        }
-    });
-
-    if !open {
-        config.show_pulse = false;
-        config.save();
-    }
-
-    for tok in color_tokens { tok.pop(); }
-    for tok in style_tokens { tok.pop(); }
 }
 
 fn render_tab_strip(ui: &Ui) {

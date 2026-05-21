@@ -75,8 +75,7 @@ pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
             (Ok(s), Ok(c)) => (s, c),
             _ => return,
         };
-        crate::ui::pulse::render(ui, &state, &mut config);
-        crate::ui::timeline::render(ui, &state, &mut config);
+        crate::ui::main::render(ui, &state, &mut config);
     }));
 }
 
