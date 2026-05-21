@@ -1,4 +1,93 @@
+//! Top-level arcdps callbacks + globals.
+
 #![cfg(windows)]
-//! stub — implemented in Task 10
-pub fn init() -> Result<(), Option<String>> { Ok(()) }
-pub fn release() {}
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use once_cell::sync::Lazy;
+
+use crate::config::{default_cbtlogs, Config};
+use crate::ei_bundle::{default_install_root, install_from_bytes, BUNDLED_EI_VERSION, BUNDLED_EI_ZIP};
+use crate::ei_parser::{parse_log, ParseError};
+use crate::ei_settings::EiSettings;
+use crate::state::{AppState, FightRecord};
+
+struct Globals {
+    state: Mutex<AppState>,
+    config: Mutex<Config>,
+    install_root: Mutex<Option<PathBuf>>,
+    settings: Mutex<EiSettings>,
+}
+
+static G: Lazy<Globals> = Lazy::new(|| Globals {
+    state: Mutex::new(AppState::new()),
+    config: Mutex::new(Config::load()),
+    install_root: Mutex::new(None),
+    settings: Mutex::new(EiSettings::default()),
+});
+
+pub fn init() -> Result<(), Option<String>> {
+    let _ = &*G;
+    crate::diag::set_enabled(G.config.lock().ok().map(|c| c.debug_logging).unwrap_or(false));
+
+    let Some(install_root) = default_install_root() else {
+        log::warn!("axipulse init: no install root (LOCALAPPDATA missing); aborting");
+        return Ok(());
+    };
+    if let Err(e) = install_from_bytes(BUNDLED_EI_ZIP, BUNDLED_EI_VERSION, &install_root) {
+        log::warn!("axipulse init: EI extract failed: {e}; subsequent parses will error");
+    } else {
+        log::warn!("axipulse init: EI installed at {install_root:?}");
+    }
+    if let Ok(mut slot) = G.install_root.lock() { *slot = Some(install_root); }
+
+    let cbtlogs = match G.config.lock().ok().map(|c| c.cbtlogs_path.clone()).filter(|s| !s.is_empty()) {
+        Some(s) => Some(PathBuf::from(s)),
+        None => default_cbtlogs(),
+    };
+    if let Some(dir) = cbtlogs {
+        if dir.exists() {
+            let _ = crate::watcher::spawn_watcher(dir, on_new_log);
+        } else {
+            log::warn!("axipulse init: cbtlogs {dir:?} does not exist; watcher not started");
+        }
+    } else {
+        log::warn!("axipulse init: no cbtlogs path resolved; watcher not started");
+    }
+
+    Ok(())
+}
+
+pub fn release() {
+    if let Ok(c) = G.config.lock() { c.save(); }
+}
+
+fn on_new_log(path: PathBuf) {
+    let install_root = match G.install_root.lock().ok().and_then(|g| g.clone()) {
+        Some(r) => r,
+        None => { log::warn!("axipulse: on_new_log fired before install_root set"); return; }
+    };
+    let settings = G.settings.lock().ok().map(|s| s.clone()).unwrap_or_default();
+    log::warn!("axipulse: parsing {path:?}");
+    match parse_log(&install_root, &settings, &path) {
+        Ok(json) => {
+            let record = FightRecord {
+                log_path: path,
+                parsed_at: std::time::SystemTime::now(),
+                data: json,
+            };
+            log::warn!(
+                "axipulse: parsed {:?}, {}ms, {} players",
+                record.log_path.file_name(),
+                record.data.duration_ms,
+                record.data.players.len(),
+            );
+            if let Ok(mut s) = G.state.lock() { s.push_fight(record); }
+        }
+        Err(ParseError::SubprocessExit { code, stderr }) => {
+            log::warn!("axipulse: parse failed (code={code:?}): {stderr}");
+        }
+        Err(e) => log::warn!("axipulse: parse failed: {e}"),
+    }
+}
