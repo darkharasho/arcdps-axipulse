@@ -17,6 +17,7 @@ use crate::state::AppState;
 const BG_WINDOW:     [f32; 4] = [0.055, 0.065, 0.085, 0.92];
 const TEXT_PRIMARY:  [f32; 4] = [0.97, 0.97, 1.00, 1.0];
 const TEXT_SECONDARY:[f32; 4] = [0.78, 0.78, 0.85, 1.0];
+const TEXT_MUTED:    [f32; 4] = [0.52, 0.54, 0.62, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TopTab { Pulse, Timeline }
@@ -96,7 +97,8 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     for tok in style_tokens { tok.pop(); }
 }
 
-/// Header row: AxiPulse logo + brand label + fight picker dropdown.
+/// Header row: AxiPulse logo + brand label + (when parsing) a pulsing
+/// indicator, then the fight picker dropdown below.
 fn render_header(ui: &Ui, state: &AppState) {
     let cursor = ui.cursor_screen_pos();
     let row_h = 28.0;
@@ -111,16 +113,61 @@ fn render_header(ui: &Ui, state: &AppState) {
         x += icon_w + 8.0;
     }
     let brand_text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
+    let axi_w = ui.calc_text_size("Axi")[0];
+    let pulse_w = ui.calc_text_size("Pulse")[0];
     {
         let draw = ui.get_window_draw_list();
         draw.add_text([x, brand_text_y], TEXT_PRIMARY, "Axi");
-        let axi_w = ui.calc_text_size("Axi")[0];
         draw.add_text([x + axi_w, brand_text_y], [0.31, 0.86, 0.61, 1.0], "Pulse");
     }
+    let brand_end_x = x + axi_w + pulse_w;
+
+    if crate::plugin::is_parsing() {
+        render_parsing_pulse(ui, brand_end_x + 14.0, cursor[1] + row_h * 0.5, brand_text_y);
+    }
+
     // Advance ImGui's layout past the header decorations so the
     // fight-picker combo lays out cleanly below.
     ui.dummy([0.0, row_h]);
     render_fight_picker(ui, state);
+}
+
+/// Heartbeat-style pulse: two quick blips then a rest, riffing on the
+/// AxiPulse logo's vibe.
+fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32) {
+    use std::time::Instant;
+    static START: once_cell::sync::Lazy<Instant> = once_cell::sync::Lazy::new(Instant::now);
+    let t = START.elapsed().as_secs_f32();
+    // 1.1s heartbeat: pulse at t=0 and t=0.18, then quiet.
+    let phase = (t / 1.1).fract();
+    let beat = |centre: f32, sigma: f32| {
+        let d = phase - centre;
+        (-(d * d) / (2.0 * sigma * sigma)).exp()
+    };
+    let intensity = (beat(0.05, 0.05) + beat(0.22, 0.05)).clamp(0.0, 1.0);
+    let radius = 4.0 + 3.5 * intensity;
+    let alpha = 0.40 + 0.55 * intensity;
+
+    let draw = ui.get_window_draw_list();
+    // Outer halo
+    let halo_r = radius + 3.0 + 2.0 * intensity;
+    let halo_color = [0.31, 0.86, 0.61, 0.18 + 0.35 * intensity];
+    let hx0 = cx - halo_r;
+    let hy0 = cy - halo_r;
+    draw.add_rect([hx0, hy0], [hx0 + halo_r * 2.0, hy0 + halo_r * 2.0], halo_color)
+        .filled(true).rounding(halo_r).build();
+    // Solid dot
+    let dot_color = [0.31, 0.86, 0.61, alpha];
+    let dx0 = cx - radius;
+    let dy0 = cy - radius;
+    draw.add_rect([dx0, dy0], [dx0 + radius * 2.0, dy0 + radius * 2.0], dot_color)
+        .filled(true).rounding(radius).build();
+
+    // "parsing…" label to the right of the dot, slightly muted.
+    let label = "parsing\u{2026}";
+    let mut text_color = TEXT_MUTED;
+    text_color[3] = 0.60 + 0.35 * intensity;
+    draw.add_text([cx + halo_r + 6.0, label_y], text_color, label);
 }
 
 /// Combo dropdown listing "Latest" + each entry in `AppState.history`,

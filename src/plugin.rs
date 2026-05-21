@@ -92,7 +92,27 @@ pub fn options_windows(ui: &arcdps::imgui::Ui, window_name: Option<&str>) -> boo
     false
 }
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// How many `on_new_log` invocations are currently parsing. UI reads
+/// this to drive the header's "parsing…" indicator.
+static PARSING_COUNT: AtomicU32 = AtomicU32::new(0);
+
+pub fn is_parsing() -> bool { PARSING_COUNT.load(Ordering::Relaxed) > 0 }
+
+/// RAII guard that increments PARSING_COUNT for the lifetime of an
+/// in-flight parse and decrements it on drop. Survives early returns
+/// and panics inside `on_new_log`.
+struct ParsingGuard;
+impl ParsingGuard {
+    fn new() -> Self { PARSING_COUNT.fetch_add(1, Ordering::Relaxed); ParsingGuard }
+}
+impl Drop for ParsingGuard {
+    fn drop(&mut self) { PARSING_COUNT.fetch_sub(1, Ordering::Relaxed); }
+}
+
 fn on_new_log(path: PathBuf) {
+    let _parsing = ParsingGuard::new();
     let install_root = match G.install_root.lock().ok().and_then(|g| g.clone()) {
         Some(r) => r,
         None => { log::warn!("axipulse: on_new_log fired before install_root set"); return; }
