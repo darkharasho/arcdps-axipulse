@@ -12,6 +12,7 @@ fn includes_required_axipulse_flags() {
     assert!(conf.contains("RawTimelineArrays=True"));
     assert!(conf.contains("ComputeDamageModifiers=True"));
     assert!(conf.contains("ParsePhases=True"));
+    assert!(conf.contains("ParseCombatReplay=True"));
     assert!(conf.contains("UploadToDPSReports=False"));
     assert!(conf.contains("CustomTooShort=2200"));
     assert!(conf.contains("OutLocation=C:\\out"));
