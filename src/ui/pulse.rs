@@ -202,7 +202,56 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
     ui.text_disabled("Per-skill heal / barrier breakdowns require the");
     ui.text_disabled("arcdps healing addon — not wired in Pulse v1.");
 }
-fn render_defense (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("defense — Task 10"); }
+fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {
+    use crate::pulse_metrics::*;
+
+    let p = &json.players[idx];
+    let dt = damage_taken(p);
+    let deaths_n = deaths(p);
+    let downs_n = downs(p);
+    let dodges_n = dodges(p);
+    let blocked_n = blocked(p);
+    let evaded_n = evaded(p);
+    let missed_n = missed(p);
+    let invulned_n = invulned(p);
+    let interrupted_n = interrupted(p);
+    let cc_in = incoming_cc(p);
+    let strips_in = incoming_strips(p);
+
+    ui.text_colored([0.95, 0.55, 0.45, 1.0], "DAMAGE TAKEN");
+    ui.text(format_damage(dt));
+    ui.spacing();
+
+    let alive_color = if deaths_n == 0 { [0.40, 0.85, 0.55, 1.0] } else { [0.95, 0.40, 0.40, 1.0] };
+    ui.text_colored(alive_color, "DEATHS / DOWNS");
+    ui.text(format!("{deaths_n} / {downs_n}"));
+    ui.separator();
+
+    let mitigation_total = blocked_n + evaded_n + missed_n + invulned_n + interrupted_n;
+    ui.text_disabled("MITIGATION");
+    ui.text(mitigation_total.to_string());
+    ui.same_line();
+    ui.text_disabled("attacks avoided");
+
+    let cell = |ui: &Ui, label: &str, value: u32| {
+        ui.text_colored([0.65, 0.68, 0.78, 1.0], label);
+        ui.text(value.to_string());
+        ui.spacing();
+    };
+    cell(ui, "BLOCKED",     blocked_n);
+    cell(ui, "EVADED",      evaded_n);
+    cell(ui, "DODGES",      dodges_n);
+    cell(ui, "MISSED",      missed_n);
+    cell(ui, "INVULNED",    invulned_n);
+    cell(ui, "INTERRUPTED", interrupted_n);
+    ui.separator();
+
+    ui.text_colored([0.95, 0.75, 0.40, 1.0], "INCOMING CC");
+    ui.text(cc_in.to_string());
+    ui.spacing();
+    ui.text_colored([0.95, 0.75, 0.40, 1.0], "INCOMING STRIPS");
+    ui.text(strips_in.to_string());
+}
 fn render_boons   (ui: &Ui, _json: &EiJson, _idx: usize) { ui.text("boons — Task 11"); }
 
 fn format_damage(d: u64) -> String {
