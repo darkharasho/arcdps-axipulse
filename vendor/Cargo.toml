@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "arcdps",
+    "arcdps_codegen",
+    "arcdps_example_plugin",
+    "evtc",
+    "evtc_dump",
+    "evtc_parse",
+]
+resolver = "2"
