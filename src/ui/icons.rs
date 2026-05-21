@@ -36,6 +36,7 @@ pub enum IconKind { Skill, Buff }
 /// special key `"__logo__"` is the AxiPulse logo PNG.
 const BUNDLED_PNGS: &[(&str, &[u8])] = &[
     ("__logo__",     include_bytes!("../assets/axipulse-logo.png")),
+    ("__heartbeat__",include_bytes!("../assets/heartbeat.png")),
     ("Amalgam",      include_bytes!("../assets/classes/Amalgam.png")),
     ("Antiquary",    include_bytes!("../assets/classes/Antiquary.png")),
     ("Berserker",    include_bytes!("../assets/classes/Berserker.png")),
