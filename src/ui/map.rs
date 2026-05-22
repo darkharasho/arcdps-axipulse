@@ -96,6 +96,42 @@ pub fn lerp_position(samples: &[Vec<f64>], t_ms: u64, polling_rate_ms: u64) -> O
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberStatus { Alive, Down, Dead }
+
+/// Status of a player at time `t_ms`. Dead overrides Down.
+pub fn status_at(dead_ranges: &[Vec<f64>], down_ranges: &[Vec<f64>], t_ms: u64) -> MemberStatus {
+    let t = t_ms as f64;
+    for r in dead_ranges {
+        if r.len() >= 2 && t >= r[0] && t <= r[1] {
+            return MemberStatus::Dead;
+        }
+    }
+    for r in down_ranges {
+        if r.len() >= 2 && t >= r[0] && t <= r[1] {
+            return MemberStatus::Down;
+        }
+    }
+    MemberStatus::Alive
+}
+
+/// Health percent at time `t_ms`. Each `samples` entry is `[time_ms, hp_percent]`.
+/// Returns the most recent sample whose time is <= `t_ms`. Falls back to the
+/// first sample if `t_ms` is before any sample. Returns 100.0 if no samples.
+pub fn health_at(samples: &[Vec<f64>], t_ms: u64) -> f64 {
+    if samples.is_empty() {
+        return 100.0;
+    }
+    let t = t_ms as f64;
+    let mut last = samples[0].get(1).copied().unwrap_or(100.0);
+    for s in samples {
+        if s.len() < 2 { continue; }
+        if s[0] > t { break; }
+        last = s[1];
+    }
+    last
+}
+
 /// Reset playback to t=0, paused, when the rendered fight changes.
 /// Returns the (possibly updated) (time_ms, playing, speed) tuple.
 #[cfg(windows)]
