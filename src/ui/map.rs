@@ -51,6 +51,15 @@ const BG_DARK:   [f32; 4] = [0.04, 0.05, 0.07, 1.0];
 #[cfg(windows)]
 const TEXT_MUTED:[f32; 4] = [0.55, 0.58, 0.65, 1.0];
 
+#[cfg(windows)]
+const TRAIL_LENGTH_SAMPLES: usize = 15;
+#[cfg(windows)]
+const TRAIL_COLOR_HISTORY: [f32; 4] = [0.86, 0.86, 0.92, 0.18];
+#[cfg(windows)]
+const TRAIL_COLOR_RECENT_SELF: [f32; 4] = [0.06, 0.72, 0.51, 0.65];
+#[cfg(windows)]
+const TRAIL_COLOR_RECENT_PEER: [f32; 4] = [0.86, 0.86, 0.92, 0.55];
+
 /// Linearly interpolate between two adjacent position samples.
 ///
 /// `samples` is the raw `combat_replay_data.positions` vec: each entry
@@ -184,6 +193,10 @@ struct PlayerDot<'a> {
     x: f32,
     y: f32,
     is_self: bool,
+    /// Index of the most recent sample at or before time_ms.
+    sample_idx: usize,
+    /// The full positions vec, borrowed for the duration of this frame.
+    positions: &'a [Vec<f64>],
 }
 
 #[cfg(windows)]
@@ -201,12 +214,19 @@ fn collect_positions_at_time<'a>(
     for (i, p) in json.players.iter().enumerate() {
         let Some(rd) = p.combat_replay_data.as_ref() else { continue };
         let Some((x, y)) = lerp_position(&rd.positions, time_ms, polling_rate) else { continue };
+        let sample_idx = if polling_rate == 0 || rd.positions.is_empty() {
+            0
+        } else {
+            ((time_ms / polling_rate) as usize).min(rd.positions.len().saturating_sub(1))
+        };
         out.push(PlayerDot {
             name: p.name.as_str(),
             profession: p.profession.as_str(),
             x: x as f32,
             y: y as f32,
             is_self: i == self_idx,
+            sample_idx,
+            positions: &rd.positions,
         });
     }
     out
@@ -286,6 +306,41 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
 
             // Time-indexed player positions.
             let dots = collect_positions_at_time(json, idx, time_ms);
+
+            // Trails (drawn before markers so dots sit on top).
+            for dot in &dots {
+                let recent_start = dot.sample_idx.saturating_sub(TRAIL_LENGTH_SAMPLES);
+                // Historical: every other sample, faded.
+                if recent_start > 1 {
+                    let mut prev: Option<[f32; 2]> = None;
+                    for sample in dot.positions[..recent_start].iter().step_by(2) {
+                        if sample.len() < 2 { continue; }
+                        let p = [ox + (sample[0] as f32) * scale, oy + (sample[1] as f32) * scale];
+                        if let Some(q) = prev {
+                            draw.add_line(q, p, TRAIL_COLOR_HISTORY).thickness(1.0).build();
+                        }
+                        prev = Some(p);
+                    }
+                }
+                // Recent: last TRAIL_LENGTH_SAMPLES segments, brighter.
+                let recent_end = (dot.sample_idx + 1).min(dot.positions.len());
+                if recent_end > recent_start + 1 {
+                    let recent_slice = &dot.positions[recent_start..recent_end];
+                    let color = if dot.is_self { TRAIL_COLOR_RECENT_SELF } else { TRAIL_COLOR_RECENT_PEER };
+                    let thick = if dot.is_self { 2.0 } else { 1.5 };
+                    let mut prev: Option<[f32; 2]> = None;
+                    for sample in recent_slice {
+                        if sample.len() < 2 { continue; }
+                        let p = [ox + (sample[0] as f32) * scale, oy + (sample[1] as f32) * scale];
+                        if let Some(q) = prev {
+                            draw.add_line(q, p, color).thickness(thick).build();
+                        }
+                        prev = Some(p);
+                    }
+                }
+            }
+
+            // Player markers.
             for dot in &dots {
                 let cx = ox + dot.x * scale;
                 let cy = oy + dot.y * scale;
