@@ -104,6 +104,11 @@ pub struct EiPlayer {
     #[serde(default)]
     pub combat_replay_data: Option<ReplayData>,
 
+    /// Skill cast history, grouped by skill id. `rotation[i].skills[j]`
+    /// has `cast_time` in ms relative to fight start.
+    #[serde(default)]
+    pub rotation: Vec<RotationEntry>,
+
     /// Populated when the arcdps healing addon is loaded. Absent for
     /// players whose client didn't have the addon running.
     #[serde(default)]
@@ -313,4 +318,29 @@ pub struct ReplayData {
     pub positions: Vec<Vec<f64>>,
     #[serde(default)]
     pub start: Option<i64>,
+    /// Time ranges (`[[start_ms, end_ms], ...]`) when the player is dead.
+    #[serde(default)]
+    pub dead: Vec<Vec<f64>>,
+    /// Time ranges (`[[start_ms, end_ms], ...]`) when the player is downed.
+    #[serde(default)]
+    pub down: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillCast {
+    /// Cast start time in ms relative to fight start. Negative for
+    /// pre-fight casts; filter those out for "recent skills" views.
+    #[serde(default)]
+    pub cast_time: i64,
+    #[serde(default)]
+    pub duration: u32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotationEntry {
+    pub id: i64,
+    #[serde(default)]
+    pub skills: Vec<SkillCast>,
 }
