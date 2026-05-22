@@ -187,17 +187,25 @@ struct PlayerDot<'a> {
 }
 
 #[cfg(windows)]
-fn collect_final_positions<'a>(json: &'a EiJson, self_idx: usize) -> Vec<PlayerDot<'a>> {
+fn collect_positions_at_time<'a>(
+    json: &'a EiJson,
+    self_idx: usize,
+    time_ms: u64,
+) -> Vec<PlayerDot<'a>> {
+    let polling_rate = json
+        .combat_replay_meta_data
+        .as_ref()
+        .and_then(|m| m.polling_rate)
+        .unwrap_or(150);
     let mut out = Vec::new();
     for (i, p) in json.players.iter().enumerate() {
         let Some(rd) = p.combat_replay_data.as_ref() else { continue };
-        let Some(last) = rd.positions.last() else { continue };
-        if last.len() < 2 { continue; }
+        let Some((x, y)) = lerp_position(&rd.positions, time_ms, polling_rate) else { continue };
         out.push(PlayerDot {
             name: p.name.as_str(),
             profession: p.profession.as_str(),
-            x: last[0] as f32,
-            y: last[1] as f32,
+            x: x as f32,
+            y: y as f32,
             is_self: i == self_idx,
         });
     }
@@ -210,7 +218,7 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
     tile_cache::drain_pending();
     let _ = sync_fight_key(log_path);
     let duration_ms = json.duration_ms;
-    let _time_ms = tick_playback(ui, duration_ms);
+    let time_ms = tick_playback(ui, duration_ms);
 
     // Resolve which WvW map this fight took place on. EI populates
     // `zone`/`map_name` for some encounters but leaves them empty for
@@ -276,8 +284,8 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 draw.add_text([cx + r + 2.0, cy - 6.0], TEXT_MUTED, lm.name);
             }
 
-            // Final-frame player positions.
-            let dots = collect_final_positions(json, idx);
+            // Time-indexed player positions.
+            let dots = collect_positions_at_time(json, idx, time_ms);
             for dot in &dots {
                 let cx = ox + dot.x * scale;
                 let cy = oy + dot.y * scale;
