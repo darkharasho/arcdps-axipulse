@@ -263,14 +263,20 @@ fn mmss(ms: u64) -> String {
 #[allow(dead_code)]
 struct PlayerDot<'a> {
     name: &'a str,
+    account: &'a str,
     profession: &'a str,
     x: f32,
     y: f32,
     is_self: bool,
+    is_commander: bool,
+    group: i32,
+    status: MemberStatus,
+    health_pct: f64,
     /// Index of the most recent sample at or before time_ms.
     sample_idx: usize,
     /// The full positions vec, borrowed for the duration of this frame.
     positions: &'a [Vec<f64>],
+    player_index: usize,
 }
 
 #[cfg(windows)]
@@ -295,12 +301,18 @@ fn collect_positions_at_time<'a>(
         };
         out.push(PlayerDot {
             name: p.name.as_str(),
+            account: p.account.as_str(),
             profession: p.profession.as_str(),
             x: x as f32,
             y: y as f32,
             is_self: i == self_idx,
+            is_commander: p.has_commander_tag,
+            group: p.group as i32,
+            status: status_at(&rd.dead, &rd.down, time_ms),
+            health_pct: health_at(&p.health_percents, time_ms),
             sample_idx,
             positions: &rd.positions,
+            player_index: i,
         });
     }
     out
@@ -418,19 +430,48 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             for dot in &dots {
                 let cx = ox + dot.x * scale;
                 let cy = oy + dot.y * scale;
-                if let Some(icon) = crate::ui::icons::lookup_bundled(dot.profession) {
-                    let sz = if dot.is_self { 18.0 } else { 14.0 };
-                    let half = sz * 0.5;
-                    if dot.is_self {
-                        draw.add_circle([cx, cy], half + 2.5, [0.06, 0.72, 0.51, 0.85])
-                            .thickness(2.0)
-                            .build();
+                let sz_alive = if dot.is_self { 18.0 } else { 14.0 };
+
+                match dot.status {
+                    MemberStatus::Dead => {
+                        let r: f32 = 7.0;
+                        draw.add_circle([cx, cy], r, [0.93, 0.27, 0.27, 0.95]).filled(true).build();
+                        draw.add_circle([cx, cy], r, [0.55, 0.10, 0.10, 1.0]).thickness(1.5).build();
+                        let h = r * 0.55;
+                        draw.add_line([cx - h, cy - h], [cx + h, cy + h], [1.0, 1.0, 1.0, 0.95]).thickness(1.8).build();
+                        draw.add_line([cx + h, cy - h], [cx - h, cy + h], [1.0, 1.0, 1.0, 0.95]).thickness(1.8).build();
                     }
-                    draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
-                } else {
-                    let r: f32 = if dot.is_self { 5.5 } else { 4.0 };
-                    let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
-                    draw.add_circle([cx, cy], r, color).filled(true).build();
+                    MemberStatus::Down => {
+                        let r: f32 = 6.5;
+                        draw.add_circle([cx, cy], r, [0.23, 0.51, 0.96, 0.85]).filled(true).build();
+                        draw.add_circle([cx, cy], r, [0.10, 0.30, 0.70, 1.0]).thickness(1.5).build();
+                        let h = r * 0.55;
+                        draw.add_triangle(
+                            [cx - h, cy - h * 0.6],
+                            [cx + h, cy - h * 0.6],
+                            [cx, cy + h * 0.7],
+                            [1.0, 1.0, 1.0, 0.95],
+                        ).filled(true).build();
+                    }
+                    MemberStatus::Alive => {
+                        if let Some(icon) = crate::ui::icons::lookup_bundled(dot.profession) {
+                            let half = sz_alive * 0.5;
+                            if dot.is_self {
+                                draw.add_circle([cx, cy], half + 2.5, [0.06, 0.72, 0.51, 0.85])
+                                    .thickness(2.0)
+                                    .build();
+                            } else if dot.is_commander {
+                                draw.add_circle([cx, cy], half + 2.5, [0.96, 0.62, 0.04, 0.90])
+                                    .thickness(2.0)
+                                    .build();
+                            }
+                            draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
+                        } else {
+                            let r: f32 = if dot.is_self { 5.5 } else { 4.0 };
+                            let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
+                            draw.add_circle([cx, cy], r, color).filled(true).build();
+                        }
+                    }
                 }
             }
 
