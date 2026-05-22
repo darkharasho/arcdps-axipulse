@@ -59,75 +59,75 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived) {
         return;
     };
 
-    // Compute the on-screen rect: fit the map's pixel-space aspect into
-    // the remaining content region.
-    let (mw, mh) = map_pixel_size(map);
+    // Render inside a child window so the map's draw_list output is
+    // clipped to this area and its allocated size can't push the parent
+    // window into scroll mode (which would hide the tab strip above).
     let avail = ui.content_region_avail();
-    let scale = (avail[0] / mw).min(avail[1] / mh).max(0.05);
-    let render_w = mw * scale;
-    let render_h = mh * scale;
-    let origin = ui.cursor_screen_pos();
-    let ox = origin[0] + (avail[0] - render_w) * 0.5;
-    let oy = origin[1];
+    let (mw, mh) = map_pixel_size(map);
+    ui.child_window("axipulse-map-canvas")
+        .size([avail[0], avail[1]])
+        .build(|| {
+            let inner = ui.content_region_avail();
+            let scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
+            let render_w = mw * scale;
+            let render_h = mh * scale;
+            let origin = ui.cursor_screen_pos();
+            let ox = origin[0] + (inner[0] - render_w) * 0.5;
+            let oy = origin[1] + (inner[1] - render_h) * 0.5;
 
-    let draw = ui.get_window_draw_list();
+            let draw = ui.get_window_draw_list();
 
-    // Background panel.
-    draw.add_rect([ox, oy], [ox + render_w, oy + render_h], BG_DARK)
-        .filled(true)
-        .build();
+            // Background panel.
+            draw.add_rect([ox, oy], [ox + render_w, oy + render_h], BG_DARK)
+                .filled(true)
+                .build();
 
-    // Tile background.
-    let tiles = get_map_tiles(map, MVP_TILE_ZOOM);
-    for tile in &tiles {
-        if let Some(h) = tile_cache::lookup(TileKey { zoom: tile.zoom, tx: tile.tx, ty: tile.ty }) {
-            let x0 = ox + tile.x * scale;
-            let y0 = oy + tile.y * scale;
-            let x1 = x0 + tile.width * scale;
-            let y1 = y0 + tile.height * scale;
-            draw.add_image(h.tex, [x0, y0], [x1, y1]).build();
-        }
-    }
-
-    // Landmark pins.
-    for lm in landmarks(map) {
-        let cx = ox + lm.x * scale;
-        let cy = oy + lm.y * scale;
-        let (r, color): (f32, [f32; 4]) = match lm.kind {
-            LandmarkType::Keep  => (6.0, [0.93, 0.27, 0.27, 0.85]),
-            LandmarkType::Tower => (5.0, [0.96, 0.62, 0.04, 0.85]),
-            LandmarkType::Camp  => (4.0, [0.13, 0.77, 0.37, 0.85]),
-            LandmarkType::Ruins => (4.0, [0.55, 0.36, 0.96, 0.85]),
-            LandmarkType::Named => (3.5, [0.42, 0.45, 0.50, 0.85]),
-        };
-        draw.add_circle([cx, cy], r, color).filled(true).build();
-        // Name text just to the right of the dot.
-        draw.add_text([cx + r + 2.0, cy - 6.0], TEXT_MUTED, lm.name);
-    }
-
-    // Final-frame player positions.
-    let dots = collect_final_positions(json, idx);
-    for dot in &dots {
-        let cx = ox + dot.x * scale;
-        let cy = oy + dot.y * scale;
-        if let Some(icon) = crate::ui::icons::lookup_bundled(dot.profession) {
-            let sz = if dot.is_self { 18.0 } else { 14.0 };
-            let half = sz * 0.5;
-            if dot.is_self {
-                draw.add_circle([cx, cy], half + 2.5, [0.06, 0.72, 0.51, 0.85])
-                    .thickness(2.0)
-                    .build();
+            // Tile background.
+            let tiles = get_map_tiles(map, MVP_TILE_ZOOM);
+            for tile in &tiles {
+                if let Some(h) = tile_cache::lookup(TileKey { zoom: tile.zoom, tx: tile.tx, ty: tile.ty }) {
+                    let x0 = ox + tile.x * scale;
+                    let y0 = oy + tile.y * scale;
+                    let x1 = x0 + tile.width * scale;
+                    let y1 = y0 + tile.height * scale;
+                    draw.add_image(h.tex, [x0, y0], [x1, y1]).build();
+                }
             }
-            draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
-        } else {
-            let r: f32 = if dot.is_self { 5.5 } else { 4.0 };
-            let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
-            draw.add_circle([cx, cy], r, color).filled(true).build();
-        }
-    }
 
-    // Advance imgui's cursor past the map so subsequent items (if any)
-    // don't overlap. Use dummy() since set_cursor_screen_pos crashed
-    // historically — see commit 6430e2f.
-    ui.dummy([avail[0], render_h]);
+            // Landmark pins.
+            for lm in landmarks(map) {
+                let cx = ox + lm.x * scale;
+                let cy = oy + lm.y * scale;
+                let (r, color): (f32, [f32; 4]) = match lm.kind {
+                    LandmarkType::Keep  => (6.0, [0.93, 0.27, 0.27, 0.85]),
+                    LandmarkType::Tower => (5.0, [0.96, 0.62, 0.04, 0.85]),
+                    LandmarkType::Camp  => (4.0, [0.13, 0.77, 0.37, 0.85]),
+                    LandmarkType::Ruins => (4.0, [0.55, 0.36, 0.96, 0.85]),
+                    LandmarkType::Named => (3.5, [0.42, 0.45, 0.50, 0.85]),
+                };
+                draw.add_circle([cx, cy], r, color).filled(true).build();
+                draw.add_text([cx + r + 2.0, cy - 6.0], TEXT_MUTED, lm.name);
+            }
+
+            // Final-frame player positions.
+            let dots = collect_final_positions(json, idx);
+            for dot in &dots {
+                let cx = ox + dot.x * scale;
+                let cy = oy + dot.y * scale;
+                if let Some(icon) = crate::ui::icons::lookup_bundled(dot.profession) {
+                    let sz = if dot.is_self { 18.0 } else { 14.0 };
+                    let half = sz * 0.5;
+                    if dot.is_self {
+                        draw.add_circle([cx, cy], half + 2.5, [0.06, 0.72, 0.51, 0.85])
+                            .thickness(2.0)
+                            .build();
+                    }
+                    draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
+                } else {
+                    let r: f32 = if dot.is_self { 5.5 } else { 4.0 };
+                    let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
+                    draw.add_circle([cx, cy], r, color).filled(true).build();
+                }
+            }
+        });
 }
