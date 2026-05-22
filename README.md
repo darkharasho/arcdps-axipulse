@@ -13,13 +13,13 @@ Renders a static top-down view of the fight on the matching WvW map:
 - Landmark pins (keeps, towers, camps, ruins).
 - Each squad member's final position with profession icon.
 - Time playback: scrubber, play/pause, speed (0.5×–2×), motion trails.
+- Per-player state overlays: skull (dead) / downed-pin markers on the map; sliding party panel with HP bars, distance-to-commander, boon stacks, and recent skill casts.
 
 **One-time setup:** run `./scripts/fetch_tiles.sh` to populate
 `src/assets/tiles/` (~25 MB). Re-run `./scripts/deploy.sh` so the
 sidecar `axipulse-assets/tiles/` is synced next to the DLL.
 
-Pan/zoom, and state overlays (down/dead, boons, skill
-casts) ship in follow-up plans.
+Pan/zoom ships in a follow-up plan.
 
 ## Build
 
