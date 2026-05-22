@@ -39,13 +39,10 @@ const GAP:    f32 = 8.0;
 
 /// Render the Pulse tab contents (no window — caller owns that).
 pub fn render_content(ui: &Ui, json: &EiJson, idx: usize) {
-    crate::ui::diag::trace("pulse::render_content begin");
     render_tab_strip(ui);
-    crate::ui::diag::trace("pulse tab strip done");
     ui.dummy([0.0, 4.0]);
 
     let subview = SUBVIEW.lock().ok().map(|g| *g).unwrap_or(Subview::Overview);
-    crate::ui::diag::trace(&format!("pulse subview: {subview:?}"));
     match subview {
         Subview::Overview => render_overview(ui, json, idx),
         Subview::Damage   => render_damage(ui, json, idx),
@@ -53,7 +50,6 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize) {
         Subview::Defense  => render_defense(ui, json, idx),
         Subview::Boons    => render_boons(ui, json, idx),
     }
-    crate::ui::diag::trace("pulse subview returned");
 }
 
 fn render_tab_strip(ui: &Ui) {
@@ -91,7 +87,6 @@ fn render_tab_strip(ui: &Ui) {
 fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
     use crate::pulse_metrics::*;
     use crate::squad_rank::{rank_in_squad, RankMetric};
-    crate::ui::diag::trace("overview begin");
 
     let p = &json.players[idx];
     let dmg = damage(p);
@@ -132,12 +127,9 @@ fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
             if d_to_tag > 0.0 { format!("{:.0}", d_to_tag) } else { "—".into() },
             None),
     ];
-    crate::ui::diag::trace("overview hero+cells data computed");
     draw_2col_card_grid(ui, &cells);
-    crate::ui::diag::trace("overview cells drawn");
     ui.dummy([0.0, 8.0]);
     render_fight_composition(ui, json, idx);
-    crate::ui::diag::trace("overview composition done");
 }
 
 fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
@@ -767,9 +759,7 @@ static COMP_SELECTED: Lazy<Mutex<Option<crate::fight_composition::GroupKey>>> =
 
 fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
     use crate::fight_composition::compute;
-    crate::ui::diag::trace("comp: compute");
     let groups = compute(json, idx);
-    crate::ui::diag::trace(&format!("comp: {} groups", groups.len()));
     if groups.is_empty() { return; }
     let total: u32 = groups.iter().map(|g| g.count).sum();
     if total == 0 { return; }
