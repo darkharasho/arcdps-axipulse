@@ -31,6 +31,17 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
     );
     ui.text_disabled("Click \"Set\" then press the chord. \"Clear\" disables the hotkey.");
 
+    ui.separator();
+    let mut show_notif = config.show_notifications;
+    if ui.checkbox("Show parse notifications", &mut show_notif) {
+        config.show_notifications = show_notif;
+        dirty = true;
+    }
+    ui.text_disabled(
+        "Transparent toast that flashes when a new log starts parsing and \
+         when it finishes — works even with the main window hidden.",
+    );
+
     if dirty { config.save(); }
 }
 

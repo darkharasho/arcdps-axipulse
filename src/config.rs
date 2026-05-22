@@ -20,6 +20,11 @@ pub struct Config {
     /// Chord string (e.g. "Ctrl+Shift+P") that toggles the AxiPulse
     /// window. Empty = no hotkey bound.
     pub toggle_visibility_hotkey: String,
+    /// Show a small transparent toast when a new log is being parsed
+    /// and briefly after a parse completes — independent of the main
+    /// AxiPulse window.
+    pub show_notifications: bool,
+    pub notifications_pos: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +62,8 @@ impl Default for Config {
             timeline_pos: None,
             timeline_layers: TimelineLayers::default(),
             toggle_visibility_hotkey: String::new(),
+            show_notifications: true,
+            notifications_pos: None,
         }
     }
 }

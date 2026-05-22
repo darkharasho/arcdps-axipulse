@@ -70,6 +70,7 @@ pub fn release() {
 
 pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
     if !not_loading { return; }
+    tick_frame();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::ui::icons::drain_pending();
         let (state, mut config) = match (G.state.lock(), G.config.lock()) {
@@ -77,6 +78,7 @@ pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
             _ => return,
         };
         crate::ui::main::render(ui, &state, &mut config);
+        crate::ui::notifier::render(ui, &mut config);
     }));
 }
 
@@ -93,11 +95,31 @@ pub fn options_windows(ui: &arcdps::imgui::Ui, window_name: Option<&str>) -> boo
 }
 
 pub fn options_end(ui: &arcdps::imgui::Ui) {
+    OPTIONS_OPEN_TICK.store(frame_counter(), Ordering::Relaxed);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let Ok(mut c) = G.config.lock() {
             crate::ui::options::render_options_end(ui, &mut c);
         }
     }));
+}
+
+/// Frame index (incremented in `imgui`) at which `options_end` most
+/// recently fired. The notifier checks `options_open_recently()` so it
+/// renders a dummy toast while the user is in the settings pane,
+/// letting them drag it into position even when no parse is active.
+static OPTIONS_OPEN_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FRAME_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn frame_counter() -> u64 { FRAME_TICK.load(Ordering::Relaxed) }
+
+pub fn tick_frame() { FRAME_TICK.fetch_add(1, Ordering::Relaxed); }
+
+/// True if `options_end` ran within the last few frames — arcdps only
+/// calls it while the settings pane is visible.
+pub fn options_open_recently() -> bool {
+    let now = FRAME_TICK.load(Ordering::Relaxed);
+    let last = OPTIONS_OPEN_TICK.load(Ordering::Relaxed);
+    last != 0 && now.saturating_sub(last) <= 2
 }
 
 /// Which hotkey slot the options window is currently rebinding. The
@@ -195,19 +217,45 @@ static PARSING_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn is_parsing() -> bool { PARSING_COUNT.load(Ordering::Relaxed) > 0 }
 
+/// Last successfully-parsed fight: `(label, when)`. Drives the
+/// "Parsed: …" toast in the notifier window so users can see logs
+/// arrive without keeping the main AxiPulse window open. Wrapped in
+/// `Mutex` (instead of an atomic) because the label is a String.
+static LAST_PARSED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+pub fn last_parsed() -> Option<(String, std::time::Instant)> {
+    LAST_PARSED.lock().ok().and_then(|g| g.clone())
+}
+
+/// File currently being parsed (filename stem, for the toast). Cleared
+/// when `ParsingGuard` drops, regardless of success.
+static PARSING_LABEL: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn parsing_label() -> Option<String> {
+    PARSING_LABEL.lock().ok().and_then(|g| g.clone())
+}
+
 /// RAII guard that increments PARSING_COUNT for the lifetime of an
 /// in-flight parse and decrements it on drop. Survives early returns
 /// and panics inside `on_new_log`.
 struct ParsingGuard;
 impl ParsingGuard {
-    fn new() -> Self { PARSING_COUNT.fetch_add(1, Ordering::Relaxed); ParsingGuard }
+    fn new(label: String) -> Self {
+        PARSING_COUNT.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut g) = PARSING_LABEL.lock() { *g = Some(label); }
+        ParsingGuard
+    }
 }
 impl Drop for ParsingGuard {
-    fn drop(&mut self) { PARSING_COUNT.fetch_sub(1, Ordering::Relaxed); }
+    fn drop(&mut self) {
+        PARSING_COUNT.fetch_sub(1, Ordering::Relaxed);
+        if let Ok(mut g) = PARSING_LABEL.lock() { *g = None; }
+    }
 }
 
 fn on_new_log(path: PathBuf) {
-    let _parsing = ParsingGuard::new();
+    let label = path.file_stem().and_then(|s| s.to_str()).unwrap_or("(log)").to_string();
+    let _parsing = ParsingGuard::new(label);
     let install_root = match G.install_root.lock().ok().and_then(|g| g.clone()) {
         Some(r) => r,
         None => { log::warn!("axipulse: on_new_log fired before install_root set"); return; }
@@ -230,7 +278,15 @@ fn on_new_log(path: PathBuf) {
                 record.data.duration_ms,
                 record.data.players.len(),
             );
+            let toast_label = format!(
+                "{} \u{00b7} {} players",
+                if record.data.fight_name.is_empty() { "Fight" } else { record.data.fight_name.as_str() },
+                record.data.players.len(),
+            );
             if let Ok(mut s) = G.state.lock() { s.push_fight(record); }
+            if let Ok(mut g) = LAST_PARSED.lock() {
+                *g = Some((toast_label, std::time::Instant::now()));
+            }
             // Arm 120 frames (~2s @ 60fps) of trace output so we can
             // pinpoint where the host crashes when a new fight first
             // renders.

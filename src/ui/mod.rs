@@ -4,6 +4,7 @@
 
 pub mod icons;
 pub mod main;
+pub mod notifier;
 pub mod options;
 pub mod pulse;
 pub mod timeline;
