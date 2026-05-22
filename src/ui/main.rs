@@ -82,9 +82,10 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         ui.dummy([0.0, 4.0]);
 
         let tab = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
+        let derived = record.derived.as_ref();
         match tab {
-            TopTab::Pulse    => crate::ui::pulse::render_content(ui, json, idx),
-            TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, &mut config.timeline_layers),
+            TopTab::Pulse    => crate::ui::pulse::render_content(ui, json, idx, derived),
+            TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, derived, &mut config.timeline_layers),
         }
     });
 

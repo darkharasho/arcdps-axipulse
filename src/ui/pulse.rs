@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use arcdps::imgui::{StyleColor, Ui};
 use once_cell::sync::Lazy;
 
+use crate::derived::Derived;
 use crate::ei_model::EiJson;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,17 +39,17 @@ const GAP:    f32 = 8.0;
 // --- entry point ---------------------------------------------------------
 
 /// Render the Pulse tab contents (no window — caller owns that).
-pub fn render_content(ui: &Ui, json: &EiJson, idx: usize) {
+pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
     render_tab_strip(ui);
     ui.dummy([0.0, 4.0]);
 
     let subview = SUBVIEW.lock().ok().map(|g| *g).unwrap_or(Subview::Overview);
     match subview {
-        Subview::Overview => render_overview(ui, json, idx),
-        Subview::Damage   => render_damage(ui, json, idx),
-        Subview::Support  => render_support(ui, json, idx),
+        Subview::Overview => render_overview(ui, json, idx, derived),
+        Subview::Damage   => render_damage(ui, json, idx, derived),
+        Subview::Support  => render_support(ui, json, idx, derived),
         Subview::Defense  => render_defense(ui, json, idx),
-        Subview::Boons    => render_boons(ui, json, idx),
+        Subview::Boons    => render_boons(ui, json, idx, derived),
     }
 }
 
@@ -84,9 +85,8 @@ fn render_tab_strip(ui: &Ui) {
 
 // --- subviews ------------------------------------------------------------
 
-fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
+fn render_overview(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
     use crate::pulse_metrics::*;
-    use crate::squad_rank::{rank_in_squad, RankMetric};
 
     let p = &json.players[idx];
     let dmg = damage(p);
@@ -99,66 +99,61 @@ fn render_overview(ui: &Ui, json: &EiJson, idx: usize) {
     let deaths_n = deaths(p);
     let downs_n = downs(p);
 
-    let dmg_rank = rank_in_squad(json, idx, RankMetric::Damage);
     hero_banner(ui,
         "DAMAGE DEALT", ACCENT_DAMAGE,
         &format_damage(dmg),
         &format!("{} DPS", format_damage(dps_v)),
-        dmg_rank.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
+        derived.rank_damage.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
     );
     ui.dummy([0.0, 2.0]);
 
     let cells = [
         ("DOWN CONTRIBUTION", ACCENT_DOWN,
             format_damage(dc),
-            rank_in_squad(json, idx, RankMetric::DownContribution).map(|r| ordinal(r))),
+            derived.rank_down_contribution.map(ordinal)),
         ("DEATHS / DOWNS", if deaths_n == 0 { ACCENT_SUCCESS } else { ACCENT_DANGER },
             format!("{deaths_n} / {downs_n}"), None),
         ("STRIPS", ACCENT_SUPPORT,
             st.to_string(),
-            rank_in_squad(json, idx, RankMetric::Strips).map(|r| ordinal(r))),
+            derived.rank_strips.map(ordinal)),
         ("CLEANSES", ACCENT_CLEANSE,
             cl.to_string(),
-            rank_in_squad(json, idx, RankMetric::Cleanses).map(|r| ordinal(r))),
+            derived.rank_cleanses.map(ordinal)),
         ("DAMAGE TAKEN", ACCENT_DEFEND,
             format_damage(dt),
-            rank_in_squad(json, idx, RankMetric::DamageTaken).map(|r| ordinal(r))),
+            derived.rank_damage_taken.map(ordinal)),
         ("DISTANCE TO TAG", ACCENT_NEUTRAL,
             if d_to_tag > 0.0 { format!("{:.0}", d_to_tag) } else { "—".into() },
             None),
     ];
     draw_2col_card_grid(ui, &cells);
     ui.dummy([0.0, 8.0]);
-    render_fight_composition(ui, json, idx);
+    render_fight_composition(ui, json, derived);
 }
 
-fn render_damage(ui: &Ui, json: &EiJson, idx: usize) {
+fn render_damage(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
     use crate::pulse_metrics::*;
-    use crate::squad_rank::{rank_in_squad, RankMetric};
-    use crate::top_skills::top_damage;
-
     let p = &json.players[idx];
     let dmg = damage(p);
     let dps_v = dps_value(p);
     let dc = down_contribution(p);
 
-    let dmg_rank = rank_in_squad(json, idx, RankMetric::Damage);
     hero_banner(ui,
         "TOTAL DAMAGE", ACCENT_DAMAGE,
         &format_damage(dmg),
         &format!("{} DPS", format_damage(dps_v)),
-        dmg_rank.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
+        derived.rank_damage.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
     );
     ui.dummy([0.0, 2.0]);
 
-    let dc_rank = rank_in_squad(json, idx, RankMetric::DownContribution);
     let cells = [
-        ("DOWN CONTRIBUTION", ACCENT_DOWN, format_damage(dc), dc_rank.map(ordinal)),
+        ("DOWN CONTRIBUTION", ACCENT_DOWN, format_damage(dc),
+            derived.rank_down_contribution.map(ordinal)),
     ];
     draw_2col_card_grid(ui, &cells);
 
     ui.dummy([0.0, 6.0]);
-    let skills = top_damage(p, 8);
+    let skills = &derived.top_damage;
     if skills.is_empty() {
         ui.text_disabled("No skill damage recorded.");
         return;
@@ -179,10 +174,8 @@ enum SupportMode { Healing, Downed, Barrier }
 
 static SUPPORT_MODE: Lazy<Mutex<SupportMode>> = Lazy::new(|| Mutex::new(SupportMode::Healing));
 
-fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
+fn render_support(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
     use crate::pulse_metrics::*;
-    use crate::squad_rank::{rank_in_squad, RankMetric};
-    use crate::top_heals::{top_healing, top_downed_healing, top_barrier};
 
     let p = &json.players[idx];
     let st = strips(p);
@@ -195,9 +188,6 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
     let barr = barrier(p);
     let inc_heal = incoming_healing(p);
 
-    // Hero banner — defaults to Healing if the addon is producing data,
-    // else falls back to Boon Strips (the prior behaviour).
-    let strips_rank = rank_in_squad(json, idx, RankMetric::Strips);
     if has_heal && heal > 0 {
         hero_banner(ui,
             "HEALING OUTPUT", ACCENT_SUPPORT,
@@ -209,25 +199,23 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
         hero_banner(ui,
             "BOON STRIPS", ACCENT_SUPPORT,
             &st.to_string(), "",
-            strips_rank.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
+            derived.rank_strips.map(|r| format!("{} in squad", ordinal(r))).as_deref(),
         );
     }
     ui.dummy([0.0, 2.0]);
 
-    let cl_rank = rank_in_squad(json, idx, RankMetric::Cleanses);
-    let strips_rank2 = rank_in_squad(json, idx, RankMetric::Strips);
     let cells: Vec<(&str, [f32; 4], String, Option<String>)> = if has_heal {
         vec![
             ("BARRIER",       [0.65, 0.51, 0.91, 1.0], format_damage(barr),       None),
             ("DOWNED HEALING",ACCENT_DOWN,             format_damage(heal_downed), None),
-            ("STRIPS",        ACCENT_SUPPORT,          st.to_string(),            strips_rank2.map(ordinal)),
-            ("CLEANSES",      ACCENT_CLEANSE,          cl.to_string(),            cl_rank.map(ordinal)),
+            ("STRIPS",        ACCENT_SUPPORT,          st.to_string(),            derived.rank_strips.map(ordinal)),
+            ("CLEANSES",      ACCENT_CLEANSE,          cl.to_string(),            derived.rank_cleanses.map(ordinal)),
             ("SELF CLEANSE",  ACCENT_CLEANSE,          cl_self.to_string(),       None),
             ("INCOMING HEAL", ACCENT_SUCCESS,          format_damage(inc_heal),   None),
         ]
     } else {
         vec![
-            ("CLEANSES",      ACCENT_CLEANSE, cl.to_string(),      cl_rank.map(ordinal)),
+            ("CLEANSES",      ACCENT_CLEANSE, cl.to_string(),      derived.rank_cleanses.map(ordinal)),
             ("SELF CLEANSE",  ACCENT_CLEANSE, cl_self.to_string(), None),
             ("STRIPS / SEC",  ACCENT_SUPPORT,
                 format!("{:.2}", st as f64 / (json.duration_ms.max(1) as f64 / 1000.0)),
@@ -236,8 +224,7 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
                 "no addon".to_string(), None),
         ]
     };
-    let cells_refs: Vec<(&str, [f32; 4], String, Option<String>)> = cells;
-    draw_2col_card_grid(ui, &cells_refs);
+    draw_2col_card_grid(ui, &cells);
 
     if !has_heal {
         ui.dummy([0.0, 4.0]);
@@ -246,7 +233,6 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
         return;
     }
 
-    // Mode toggle for top-skills.
     ui.dummy([0.0, 6.0]);
     render_support_mode_toggle(ui);
 
@@ -259,19 +245,19 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize) {
 
     match mode {
         SupportMode::Healing => {
-            let skills = top_healing(p, 8);
-            render_value_bars(ui, json, &skills.iter().map(|s| (s.id, s.healing)).collect::<Vec<_>>(),
-                              "heal", [0.40, 0.85, 0.65, 0.55]);
+            render_value_bars(ui, json,
+                &derived.top_healing.iter().map(|s| (s.id, s.healing)).collect::<Vec<_>>(),
+                "heal", [0.40, 0.85, 0.65, 0.55]);
         }
         SupportMode::Downed => {
-            let skills = top_downed_healing(p, 8);
-            render_value_bars(ui, json, &skills.iter().map(|s| (s.id, s.downed_healing)).collect::<Vec<_>>(),
-                              "down", [0.97, 0.55, 0.42, 0.55]);
+            render_value_bars(ui, json,
+                &derived.top_downed_healing.iter().map(|s| (s.id, s.downed_healing)).collect::<Vec<_>>(),
+                "down", [0.97, 0.55, 0.42, 0.55]);
         }
         SupportMode::Barrier => {
-            let skills = top_barrier(p, 8);
-            render_value_bars(ui, json, &skills.iter().map(|s| (s.id, s.barrier)).collect::<Vec<_>>(),
-                              "barr", [0.65, 0.51, 0.91, 0.55]);
+            render_value_bars(ui, json,
+                &derived.top_barrier.iter().map(|s| (s.id, s.barrier)).collect::<Vec<_>>(),
+                "barr", [0.65, 0.51, 0.91, 0.55]);
         }
     }
 }
@@ -438,17 +424,15 @@ fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {
     draw_2col_card_grid(ui, &mit_cells);
 }
 
-fn render_boons(ui: &Ui, json: &EiJson, idx: usize) {
-    use crate::boon_uptime::{collect_uptimes, BoonStacking};
+fn render_boons(ui: &Ui, json: &EiJson, _idx: usize, derived: &Derived) {
+    use crate::boon_uptime::BoonStacking;
 
-    let p = &json.players[idx];
-    let ups = collect_uptimes(p);
-    if ups.is_empty() {
+    if derived.boon_uptimes.is_empty() {
         ui.text_disabled("No boon uptimes recorded for this fight.");
         return;
     }
     section_label(ui, "BOON UPTIME");
-    for boon in &ups {
+    for boon in &derived.boon_uptimes {
         let (frac, label) = match boon.stacking {
             BoonStacking::Intensity => {
                 let f = (boon.uptime / 25.0).clamp(0.0, 1.0) as f32;
@@ -757,9 +741,8 @@ fn draw_boon_bar(ui: &Ui, json: &EiJson, id: i64, name: &str, frac: f32, label: 
 static COMP_SELECTED: Lazy<Mutex<Option<crate::fight_composition::GroupKey>>> =
     Lazy::new(|| Mutex::new(None));
 
-fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
-    use crate::fight_composition::compute;
-    let groups = compute(json, idx);
+fn render_fight_composition(ui: &Ui, _json: &EiJson, derived: &Derived) {
+    let groups = &derived.composition;
     if groups.is_empty() { return; }
     let total: u32 = groups.iter().map(|g| g.count).sum();
     if total == 0 { return; }
@@ -781,7 +764,7 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
         let mut x = cursor[0];
         let seg_gap = 2.0;
         let total_w = avail - seg_gap * (groups.len() as f32 - 1.0).max(0.0);
-        for g in &groups {
+        for g in groups.iter() {
             let w = total_w * (g.count as f32 / total as f32);
             draw.add_rect([x, cursor[1]], [x + w, cursor[1] + bar_h], g.color)
                 .filled(true).rounding(3.0).build();

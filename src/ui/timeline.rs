@@ -30,29 +30,21 @@ pub fn render_content(
     ui: &Ui,
     json: &EiJson,
     idx: usize,
+    derived: &crate::derived::Derived,
     layers: &mut crate::config::TimelineLayers,
 ) {
-    use crate::timeline_boons::{defensive_boons, offensive_boons};
-    use crate::timeline_buckets::{extract_damage_dealt, extract_damage_taken};
-    use crate::timeline_distance::distance_to_commander_per_second;
-    use crate::timeline_health::sample_health_per_second;
-
     render_layer_toggles(ui, layers);
     ui.separator();
     render_time_axis(ui, json.duration_ms);
 
-    // Compute lane data once so the crosshair pass can re-sample without
-    // doubling EI traversal.
-    let p = &json.players[idx];
+    // All heavy data was pre-computed once when the fight landed.
     let dur = json.duration_ms;
-    let health = if layers.health { sample_health_per_second(p, dur) } else { Vec::new() };
-    let dmg_dealt = if layers.damage_dealt { extract_damage_dealt(p) } else { Vec::new() };
-    let dmg_taken = if layers.damage_taken { extract_damage_taken(p) } else { Vec::new() };
-    let distance = if layers.distance_to_tag {
-        distance_to_commander_per_second(json, idx, dur)
-    } else { Vec::new() };
-    let off = if layers.offensive_boons { offensive_boons(p, dur) } else { Vec::new() };
-    let def = if layers.defensive_boons { defensive_boons(p, dur) } else { Vec::new() };
+    let health    = if layers.health           { derived.health_samples.as_slice() }    else { &[] };
+    let dmg_dealt = if layers.damage_dealt     { derived.dmg_dealt_samples.as_slice() } else { &[] };
+    let dmg_taken = if layers.damage_taken     { derived.dmg_taken_samples.as_slice() } else { &[] };
+    let distance  = if layers.distance_to_tag  { derived.distance_samples.as_slice() }  else { &[] };
+    let off: &[_] = if layers.offensive_boons  { derived.off_boons.as_slice() }         else { &[] };
+    let def: &[_] = if layers.defensive_boons  { derived.def_boons.as_slice() }         else { &[] };
 
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
     let lanes_origin = ui.cursor_screen_pos();
@@ -94,7 +86,7 @@ pub fn render_content(
     );
 
     ui.dummy([0.0, 6.0]);
-    render_inspector(ui, json, idx);
+    render_inspector(ui, json, idx, derived);
 }
 
 fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
@@ -380,10 +372,8 @@ fn draw_boon_lane(
 
 // --- inspector cards under the timeline ---------------------------------
 
-fn render_inspector(ui: &Ui, json: &EiJson, idx: usize) {
-    use crate::boon_uptime::collect_uptimes;
+fn render_inspector(ui: &Ui, json: &EiJson, idx: usize, derived: &crate::derived::Derived) {
     use crate::pulse_metrics::*;
-    use crate::timeline_distance::distance_to_commander_per_second;
 
     let p = &json.players[idx];
     let ending_hp = p.health_percents.last()
@@ -393,14 +383,14 @@ fn render_inspector(ui: &Ui, json: &EiJson, idx: usize) {
     let downs_n = downs(p);
     let dmg_taken = damage_taken(p);
 
-    let boons = collect_uptimes(p);
-    let dist_samples = distance_to_commander_per_second(json, idx, json.duration_ms);
-    let (dist_avg, dist_max) = if dist_samples.is_empty() {
+    let _ = json;
+    let boons = &derived.boon_uptimes;
+    let (dist_avg, dist_max) = if derived.distance_samples.is_empty() {
         (None, None)
     } else {
-        let sum: f64 = dist_samples.iter().sum();
-        let avg = sum / dist_samples.len() as f64;
-        let max = dist_samples.iter().copied().fold(0.0_f64, f64::max);
+        let sum: f64 = derived.distance_samples.iter().sum();
+        let avg = sum / derived.distance_samples.len() as f64;
+        let max = derived.distance_samples.iter().copied().fold(0.0_f64, f64::max);
         (Some(avg), Some(max))
     };
 
@@ -424,7 +414,7 @@ fn render_inspector(ui: &Ui, json: &EiJson, idx: usize) {
     draw_inspector_card(ui, start_x, start_y, col_w, card_h, "Health & Survival", COLOR_HEALTH, &health_lines);
 
     let mut boon_lines: Vec<(&str, String, [f32; 4])> = Vec::new();
-    for b in &boons {
+    for b in boons.iter() {
         let label = match b.stacking {
             crate::boon_uptime::BoonStacking::Intensity => format!("{:.1} st", b.uptime),
             crate::boon_uptime::BoonStacking::Duration  => format!("{:.0}%", b.uptime),

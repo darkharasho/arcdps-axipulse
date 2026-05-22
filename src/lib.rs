@@ -2,6 +2,7 @@
 
 pub mod boon_uptime;
 pub mod config;
+pub mod derived;
 pub mod diag;
 pub mod ei_bundle;
 pub mod ei_model;

@@ -121,10 +121,13 @@ fn on_new_log(path: PathBuf) {
     log::warn!("axipulse: parsing {path:?}");
     match parse_log(&install_root, &settings, &path) {
         Ok(json) => {
+            // Pre-compute everything heavy the UI used to do per frame.
+            let derived = std::sync::Arc::new(crate::derived::Derived::compute(&json));
             let record = FightRecord {
                 log_path: path,
                 parsed_at: std::time::SystemTime::now(),
                 data: json,
+                derived,
             };
             log::warn!(
                 "axipulse: parsed {:?}, {}ms, {} players",
