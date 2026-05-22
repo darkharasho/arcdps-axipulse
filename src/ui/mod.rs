@@ -4,6 +4,7 @@
 
 pub mod icons;
 pub mod main;
+pub mod map;
 pub mod notifier;
 pub mod options;
 pub mod pulse;

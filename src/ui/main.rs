@@ -20,7 +20,7 @@ const TEXT_SECONDARY:[f32; 4] = [0.78, 0.78, 0.85, 1.0];
 const TEXT_MUTED:    [f32; 4] = [0.52, 0.54, 0.62, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopTab { Pulse, Timeline }
+enum TopTab { Pulse, Timeline, Map }
 
 static TOP_TAB: Lazy<Mutex<TopTab>> = Lazy::new(|| Mutex::new(TopTab::Pulse));
 
@@ -86,6 +86,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         match tab {
             TopTab::Pulse    => crate::ui::pulse::render_content(ui, json, idx, derived),
             TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, derived, &mut config.timeline_layers),
+            TopTab::Map      => crate::ui::map::render_content(ui, json, idx, derived),
         }
     });
 
@@ -260,7 +261,9 @@ fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
 
 fn render_top_tabs(ui: &Ui) {
     let mut current = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
-    for (i, (label, tab)) in [("Pulse", TopTab::Pulse), ("Timeline", TopTab::Timeline)].iter().enumerate() {
+    let tabs = [("Pulse", TopTab::Pulse), ("Timeline", TopTab::Timeline), ("Map", TopTab::Map)];
+    let n = tabs.len();
+    for (i, (label, tab)) in tabs.iter().enumerate() {
         let selected = current == *tab;
         let tokens = if selected {
             vec![
@@ -274,7 +277,7 @@ fn render_top_tabs(ui: &Ui) {
         };
         if ui.button(label) { current = *tab; }
         for t in tokens { t.pop(); }
-        if i + 1 < 2 { ui.same_line(); }
+        if i + 1 < n { ui.same_line(); }
     }
     if let Ok(mut g) = TOP_TAB.lock() { *g = current; }
 }
