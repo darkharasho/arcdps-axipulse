@@ -45,8 +45,15 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived) {
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
 
-    // Resolve which WvW map this fight took place on.
-    let zone = json.zone.as_deref().or(json.map_name.as_deref()).unwrap_or("");
+    // Resolve which WvW map this fight took place on. EI populates
+    // `zone`/`map_name` for some encounters but leaves them empty for
+    // WvW logs — fight_name ("Blue Alpine Borderlands", etc.) is the
+    // reliable source there.
+    let zone = [json.zone.as_deref(), json.map_name.as_deref(), Some(json.fight_name.as_str())]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
     let Some(map) = resolve_map_from_zone(zone) else {
         ui.text_colored(TEXT_MUTED, format!("Not a WvW fight (zone: \"{}\")", zone));
         return;

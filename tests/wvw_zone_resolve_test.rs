@@ -34,3 +34,26 @@ fn pve_map_returns_none() {
 fn empty_returns_none() {
     assert_eq!(resolve_map_from_zone(""), None);
 }
+
+// EI populates `fight_name` for WvW logs with names like
+// "Blue Alpine Borderlands" / "Red Desert Borderlands" — no prefix.
+// These are the strings the resolver actually sees in practice.
+#[test]
+fn raw_blue_alpine_borderlands() {
+    assert_eq!(resolve_map_from_zone("Blue Alpine Borderlands"), Some(WvwMap::BlueBorderlands));
+}
+
+#[test]
+fn raw_green_alpine_borderlands() {
+    assert_eq!(resolve_map_from_zone("Green Alpine Borderlands"), Some(WvwMap::GreenBorderlands));
+}
+
+#[test]
+fn raw_red_desert_borderlands() {
+    assert_eq!(resolve_map_from_zone("Red Desert Borderlands"), Some(WvwMap::RedBorderlands));
+}
+
+#[test]
+fn raw_eternal_battlegrounds() {
+    assert_eq!(resolve_map_from_zone("Eternal Battlegrounds"), Some(WvwMap::EternalBattlegrounds));
+}
