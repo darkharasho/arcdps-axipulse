@@ -7,4 +7,5 @@ pub mod main;
 pub mod notifier;
 pub mod options;
 pub mod pulse;
+pub mod tile_cache;
 pub mod timeline;
