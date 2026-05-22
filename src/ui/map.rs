@@ -584,11 +584,14 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             let ox = origin[0] + panel_w + (map_avail_w - render_w) * 0.5;
             let oy = origin[1] + (inner[1] - render_h) * 0.5;
 
-            let draw = ui.get_window_draw_list();
-
+            // Panel first — render_party_panel acquires its own DrawListMut,
+            // and imgui-rs forbids two live instances per window. So we run
+            // the panel BEFORE grabbing the outer draw list.
             if panel_open {
                 render_party_panel(ui, json, idx, time_ms, [origin[0], origin[1]], [panel_w, inner[1]]);
             }
+
+            let draw = ui.get_window_draw_list();
 
             // Background panel.
             draw.add_rect([ox, oy], [ox + render_w, oy + render_h], BG_DARK)
