@@ -777,16 +777,12 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
     section_label(ui, "FIGHT COMPOSITION");
 
     let mut selected = COMP_SELECTED.lock().ok().and_then(|g| g.clone());
-    crate::ui::diag::trace("comp: about to draw bar+pills");
 
-    // Segmented bar — proportional widths, one colour per group.
     let avail = ui.content_region_avail()[0].max(120.0);
     let pill_h = 22.0;
     let pad_x = 8.0;
     let pad_between = 6.0;
     {
-        // Scope the draw list so it releases before downstream helpers
-        // (draw_class_chips) re-acquire it — imgui-rs panics otherwise.
         let cursor = ui.cursor_screen_pos();
         let bar_h = 10.0;
         let draw = ui.get_window_draw_list();
@@ -840,7 +836,9 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
         }
     }
 
-    // Hit-test pass (no draw list acquisition; invisible_button is safe).
+    // Hit-test pass — uses real ImGui items (not set_cursor_screen_pos)
+    // so the cursor flows naturally and End() can finalise the window.
+    // The pills row's vertical span is reserved by ui.dummy below.
     let cursor = ui.cursor_screen_pos();
     let mut px = cursor[0];
     let py = cursor[1];
@@ -864,19 +862,17 @@ fn render_fight_composition(ui: &Ui, json: &EiJson, idx: usize) {
         px += pill_w + pad_between;
     }
     if let Ok(mut g) = COMP_SELECTED.lock() { *g = selected.clone(); }
-    crate::ui::diag::trace("comp: bar+pills+hit-test done");
-    // Park the cursor exactly at the bottom of the pill row. Skipping
-    // `ui.dummy(...)` here avoids stacking the auto ItemSpacing on top
-    // of the row's natural height when chips render next.
-    ui.set_cursor_screen_pos([cursor[0], py + pill_h + 2.0]);
+    // Reserve the pill row's vertical span via a regular item rather than
+    // set_cursor_screen_pos. Manually-set absolute cursors after a series
+    // of invisible_buttons crashed the host's ImGui End() on big fights.
+    ui.set_cursor_screen_pos([cursor[0], py]);
+    ui.dummy([avail, pill_h + 2.0]);
 
     // Expanded per-spec chips for the selected group.
     if let Some(key) = &selected {
         if let Some(g) = groups.iter().find(|g| &g.key == key) {
             if !g.class_counts.is_empty() {
-                crate::ui::diag::trace(&format!("comp: drawing {} chips", g.class_counts.len()));
                 draw_class_chips(ui, &g.class_counts, g.color);
-                crate::ui::diag::trace("comp: chips done");
             }
         }
     }
