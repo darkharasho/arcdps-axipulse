@@ -34,12 +34,19 @@ struct MapPlayback {
     playing: bool,
     speed: f32,
     fight_key: Option<PathBuf>,
+    show_party_panel: bool,
 }
 
 #[cfg(windows)]
 impl MapPlayback {
     fn new() -> Self {
-        Self { time_ms: 0, playing: false, speed: 1.0, fight_key: None }
+        Self {
+            time_ms: 0,
+            playing: false,
+            speed: 1.0,
+            fight_key: None,
+            show_party_panel: false,
+        }
     }
 }
 
@@ -204,9 +211,9 @@ fn tick_playback(ui: &Ui, duration_ms: u64) -> u64 {
 #[cfg(windows)]
 fn render_controls(ui: &Ui, duration_ms: u64) {
     // Snapshot state up front so we don't hold the lock across imgui calls.
-    let (cur_time, playing, speed) = {
+    let (cur_time, playing, speed, panel_open) = {
         let g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
-        (g.time_ms, g.playing, g.speed)
+        (g.time_ms, g.playing, g.speed, g.show_party_panel)
     };
 
     // Play / Pause button.
@@ -233,6 +240,13 @@ fn render_controls(ui: &Ui, duration_ms: u64) {
     }
     ui.same_line();
 
+    let party_label = if panel_open { "Party*" } else { "Party " };
+    if ui.button(party_label) {
+        let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        g.show_party_panel = !g.show_party_panel;
+    }
+    ui.same_line();
+
     // M:SS / M:SS time label.
     let label = format!("{} / {}", mmss(cur_time), mmss(duration_ms));
     ui.text(&label);
@@ -251,6 +265,149 @@ fn render_controls(ui: &Ui, duration_ms: u64) {
         g.time_ms = slider_val.max(0) as u64;
         g.playing = false;
     }
+}
+
+#[cfg(windows)]
+fn render_party_panel(
+    ui: &Ui,
+    json: &EiJson,
+    self_idx: usize,
+    time_ms: u64,
+    panel_origin: [f32; 2],
+    panel_size: [f32; 2],
+) {
+    let draw = ui.get_window_draw_list();
+
+    // Panel background.
+    let bg = [0.08, 0.10, 0.13, 0.92];
+    draw.add_rect(
+        panel_origin,
+        [panel_origin[0] + panel_size[0], panel_origin[1] + panel_size[1]],
+        bg,
+    ).filled(true).rounding(6.0).build();
+
+    // Local player's group.
+    let local_group = json.players.get(self_idx).map(|p| p.group).unwrap_or(-1);
+    let commander_pos: Option<(f64, f64)> = find_commander_position(json, time_ms);
+    let inch_to_pixel = json
+        .combat_replay_meta_data
+        .as_ref()
+        .and_then(|m| m.inch_to_pixel)
+        .unwrap_or(1.0);
+
+    let pad = 10.0_f32;
+    let mut y = panel_origin[1] + pad;
+    draw.add_text(
+        [panel_origin[0] + pad, y],
+        [0.55, 0.58, 0.65, 1.0],
+        "PARTY",
+    );
+    y += 18.0;
+
+    let row_h = 56.0_f32;
+    let polling_rate = json
+        .combat_replay_meta_data
+        .as_ref()
+        .and_then(|m| m.polling_rate)
+        .unwrap_or(150);
+
+    for (i, p) in json.players.iter().enumerate() {
+        if p.group != local_group { continue; }
+        if p.not_in_squad { continue; }
+
+        let rd_pos = p.combat_replay_data.as_ref()
+            .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
+        let status = p.combat_replay_data.as_ref()
+            .map(|rd| status_at(&rd.dead, &rd.down, time_ms))
+            .unwrap_or(MemberStatus::Alive);
+        let hp = health_at(&p.health_percents, time_ms);
+
+        let row_y0 = y;
+        let row_y1 = y + row_h;
+        draw.add_rect(
+            [panel_origin[0] + 4.0, row_y0],
+            [panel_origin[0] + panel_size[0] - 4.0, row_y1],
+            [1.0, 1.0, 1.0, 0.04],
+        ).filled(true).rounding(4.0).build();
+
+        let icon_size = 20.0;
+        let icon_x = panel_origin[0] + pad;
+        let icon_y = row_y0 + 6.0;
+        if let Some(icon) = crate::ui::icons::lookup_bundled(p.profession.as_str()) {
+            draw.add_image(
+                icon.tex,
+                [icon_x, icon_y],
+                [icon_x + icon_size, icon_y + icon_size],
+            ).build();
+        }
+
+        let name_x = icon_x + icon_size + 8.0;
+        let name_color = if i == self_idx { [0.06, 0.72, 0.51, 1.0] }
+            else if p.has_commander_tag { [0.96, 0.62, 0.04, 1.0] }
+            else { [0.97, 0.97, 1.00, 1.0] };
+        draw.add_text([name_x, icon_y + 2.0], name_color, p.name.as_str());
+
+        if let (Some(cp), Some((px, py))) = (commander_pos, rd_pos) {
+            if !p.has_commander_tag {
+                let dx = (px - cp.0) as f32;
+                let dy = (py - cp.1) as f32;
+                let pixels = (dx * dx + dy * dy).sqrt();
+                let inches = (pixels / inch_to_pixel as f32) as i32;
+                let dist_color = if inches > 600 { [0.93, 0.27, 0.27, 1.0] }
+                    else if inches > 300 { [0.96, 0.62, 0.04, 1.0] }
+                    else { [0.13, 0.77, 0.37, 1.0] };
+                draw.add_text(
+                    [panel_origin[0] + panel_size[0] - 50.0, icon_y + 2.0],
+                    dist_color,
+                    format!("{}", inches),
+                );
+            }
+        }
+
+        let bar_x0 = name_x;
+        let bar_y0 = row_y0 + 26.0;
+        let bar_w = panel_size[0] - (name_x - panel_origin[0]) - pad;
+        let bar_h = 8.0;
+        draw.add_rect([bar_x0, bar_y0], [bar_x0 + bar_w, bar_y0 + bar_h], [1.0, 1.0, 1.0, 0.08])
+            .filled(true).rounding(2.0).build();
+        let (fill_color, fill_frac, label): ([f32; 4], f32, String) = match status {
+            MemberStatus::Dead => ([0.55, 0.13, 0.13, 1.0], 1.0, "Dead".to_string()),
+            MemberStatus::Down => ([0.23, 0.51, 0.96, 1.0], 1.0, "Down".to_string()),
+            MemberStatus::Alive => {
+                let c = if hp > 50.0 { [0.13, 0.77, 0.37, 1.0] }
+                    else if hp > 25.0 { [0.96, 0.62, 0.04, 1.0] }
+                    else { [0.93, 0.27, 0.27, 1.0] };
+                (c, (hp / 100.0) as f32, format!("{}%", hp.round() as i32))
+            }
+        };
+        let fill_w = (bar_w * fill_frac).max(0.0);
+        if fill_w > 0.0 {
+            draw.add_rect([bar_x0, bar_y0], [bar_x0 + fill_w, bar_y0 + bar_h], fill_color)
+                .filled(true).rounding(2.0).build();
+        }
+        draw.add_text([bar_x0 + 4.0, bar_y0 + bar_h + 2.0], [0.78, 0.78, 0.85, 1.0], &label);
+
+        y += row_h + 4.0;
+        if y > panel_origin[1] + panel_size[1] - row_h { break; }
+    }
+}
+
+#[cfg(windows)]
+fn find_commander_position(json: &EiJson, time_ms: u64) -> Option<(f64, f64)> {
+    let polling_rate = json
+        .combat_replay_meta_data
+        .as_ref()
+        .and_then(|m| m.polling_rate)
+        .unwrap_or(150);
+    for p in &json.players {
+        if !p.has_commander_tag { continue; }
+        if let Some(rd) = p.combat_replay_data.as_ref() {
+            if let Some(pos) = lerp_position(&rd.positions, time_ms, polling_rate) {
+                return Some(pos);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(windows)]
@@ -348,15 +505,23 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
     ui.child_window("axipulse-map-canvas")
         .size([avail[0], avail[1]])
         .build(|| {
+            let panel_open = PLAYBACK.lock().ok().map(|g| g.show_party_panel).unwrap_or(false);
+            let panel_w: f32 = if panel_open { 260.0 } else { 0.0 };
+
             let inner = ui.content_region_avail();
-            let scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
+            let map_avail_w = (inner[0] - panel_w).max(10.0);
+            let scale = (map_avail_w / mw).min(inner[1] / mh).max(0.01);
             let render_w = mw * scale;
             let render_h = mh * scale;
             let origin = ui.cursor_screen_pos();
-            let ox = origin[0] + (inner[0] - render_w) * 0.5;
+            let ox = origin[0] + panel_w + (map_avail_w - render_w) * 0.5;
             let oy = origin[1] + (inner[1] - render_h) * 0.5;
 
             let draw = ui.get_window_draw_list();
+
+            if panel_open {
+                render_party_panel(ui, json, idx, time_ms, [origin[0], origin[1]], [panel_w, inner[1]]);
+            }
 
             // Background panel.
             draw.add_rect([ox, oy], [ox + render_w, oy + render_h], BG_DARK)
