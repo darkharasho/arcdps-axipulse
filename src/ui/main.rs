@@ -86,7 +86,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         match tab {
             TopTab::Pulse    => crate::ui::pulse::render_content(ui, json, idx, derived),
             TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, derived, &mut config.timeline_layers),
-            TopTab::Map      => crate::ui::map::render_content(ui, json, idx, derived),
+            TopTab::Map      => crate::ui::map::render_content(ui, json, idx, derived, &record.log_path),
         }
     });
 

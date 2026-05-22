@@ -2,6 +2,13 @@
 //! squad positions on top of tile background + landmark pins.
 
 #[cfg(windows)]
+use std::sync::Mutex;
+#[cfg(windows)]
+use std::path::PathBuf;
+#[cfg(windows)]
+use once_cell::sync::Lazy;
+
+#[cfg(windows)]
 use arcdps::imgui::Ui;
 
 #[cfg(windows)]
@@ -17,6 +24,27 @@ use crate::ui::tile_cache::{self, TileKey};
 
 #[cfg(windows)]
 const MVP_TILE_ZOOM: u32 = 5;
+
+/// Playback state for the Map tab. One instance lives for the plugin
+/// lifetime; it resets to t=0 / paused whenever the rendered fight
+/// changes (detected via `log_path`).
+#[cfg(windows)]
+struct MapPlayback {
+    time_ms: u64,
+    playing: bool,
+    speed: f32,
+    fight_key: Option<PathBuf>,
+}
+
+#[cfg(windows)]
+impl MapPlayback {
+    fn new() -> Self {
+        Self { time_ms: 0, playing: false, speed: 1.0, fight_key: None }
+    }
+}
+
+#[cfg(windows)]
+static PLAYBACK: Lazy<Mutex<MapPlayback>> = Lazy::new(|| Mutex::new(MapPlayback::new()));
 
 #[cfg(windows)]
 const BG_DARK:   [f32; 4] = [0.04, 0.05, 0.07, 1.0];
@@ -59,6 +87,19 @@ pub fn lerp_position(samples: &[Vec<f64>], t_ms: u64, polling_rate_ms: u64) -> O
     ))
 }
 
+/// Reset playback to t=0, paused, when the rendered fight changes.
+/// Returns the (possibly updated) (time_ms, playing, speed) tuple.
+#[cfg(windows)]
+fn sync_fight_key(current: &PathBuf) -> (u64, bool, f32) {
+    let mut guard = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+    if guard.fight_key.as_ref() != Some(current) {
+        guard.fight_key = Some(current.clone());
+        guard.time_ms = 0;
+        guard.playing = false;
+    }
+    (guard.time_ms, guard.playing, guard.speed)
+}
+
 #[cfg(windows)]
 #[allow(dead_code)]
 struct PlayerDot<'a> {
@@ -88,9 +129,10 @@ fn collect_final_positions<'a>(json: &'a EiJson, self_idx: usize) -> Vec<PlayerD
 }
 
 #[cfg(windows)]
-pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived) {
+pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, log_path: &std::path::PathBuf) {
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
+    let (_time_ms, _playing, _speed) = sync_fight_key(log_path);
 
     // Resolve which WvW map this fight took place on. EI populates
     // `zone`/`map_name` for some encounters but leaves them empty for
