@@ -217,6 +217,13 @@ static PARSING_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn is_parsing() -> bool { PARSING_COUNT.load(Ordering::Relaxed) > 0 }
 
+/// Resolved directory the DLL was loaded from. Used by the tile cache
+/// to locate sidecar assets at `<install_root>/axipulse-assets/tiles/`.
+/// Returns `None` until arcdps has told us the install location.
+pub fn install_root() -> Option<std::path::PathBuf> {
+    G.install_root.lock().ok().and_then(|g| g.clone())
+}
+
 /// Last successfully-parsed fight: `(label, when)`. Drives the
 /// "Parsed: …" toast in the notifier window so users can see logs
 /// arrive without keeping the main AxiPulse window open. Wrapped in
