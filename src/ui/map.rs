@@ -15,7 +15,33 @@ const MVP_TILE_ZOOM: u32 = 5;
 const BG_DARK:   [f32; 4] = [0.04, 0.05, 0.07, 1.0];
 const TEXT_MUTED:[f32; 4] = [0.55, 0.58, 0.65, 1.0];
 
-pub fn render_content(ui: &Ui, json: &EiJson, _idx: usize, _derived: &Derived) {
+#[allow(dead_code)]
+struct PlayerDot<'a> {
+    name: &'a str,
+    profession: &'a str,
+    x: f32,
+    y: f32,
+    is_self: bool,
+}
+
+fn collect_final_positions<'a>(json: &'a EiJson, self_idx: usize) -> Vec<PlayerDot<'a>> {
+    let mut out = Vec::new();
+    for (i, p) in json.players.iter().enumerate() {
+        let Some(rd) = p.combat_replay_data.as_ref() else { continue };
+        let Some(last) = rd.positions.last() else { continue };
+        if last.len() < 2 { continue; }
+        out.push(PlayerDot {
+            name: p.name.as_str(),
+            profession: p.profession.as_str(),
+            x: last[0] as f32,
+            y: last[1] as f32,
+            is_self: i == self_idx,
+        });
+    }
+    out
+}
+
+pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived) {
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
 
@@ -70,6 +96,27 @@ pub fn render_content(ui: &Ui, json: &EiJson, _idx: usize, _derived: &Derived) {
         draw.add_circle([cx, cy], r, color).filled(true).build();
         // Name text just to the right of the dot.
         draw.add_text([cx + r + 2.0, cy - 6.0], TEXT_MUTED, lm.name);
+    }
+
+    // Final-frame player positions.
+    let dots = collect_final_positions(json, idx);
+    for dot in &dots {
+        let cx = ox + dot.x * scale;
+        let cy = oy + dot.y * scale;
+        if let Some(icon) = crate::ui::icons::lookup_bundled(dot.profession) {
+            let sz = if dot.is_self { 18.0 } else { 14.0 };
+            let half = sz * 0.5;
+            if dot.is_self {
+                draw.add_circle([cx, cy], half + 2.5, [0.06, 0.72, 0.51, 0.85])
+                    .thickness(2.0)
+                    .build();
+            }
+            draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
+        } else {
+            let r: f32 = if dot.is_self { 5.5 } else { 4.0 };
+            let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
+            draw.add_circle([cx, cy], r, color).filled(true).build();
+        }
     }
 
     // Advance imgui's cursor past the map so subsequent items (if any)
