@@ -132,6 +132,44 @@ pub fn health_at(samples: &[Vec<f64>], t_ms: u64) -> f64 {
     last
 }
 
+/// Boon stack count at time `t_ms`. Each `states` entry is `[time_ms, stacks]`.
+/// Returns the value of the last sample at or before `t_ms`, else 0.
+pub fn boon_stacks_at(states: &[Vec<f64>], t_ms: u64) -> i32 {
+    if states.is_empty() {
+        return 0;
+    }
+    let t = t_ms as f64;
+    let mut last = 0_i32;
+    for s in states {
+        if s.len() < 2 { continue; }
+        if s[0] > t { break; }
+        last = s[1] as i32;
+    }
+    last
+}
+
+/// Up to `max_results` most recent skill casts at or before `t_ms`, newest
+/// first. Negative cast times (pre-fight) are filtered out. Returns
+/// `Vec<(skill_id, cast_time_ms)>`.
+pub fn recent_skill_casts(
+    rotation: &[crate::ei_model::RotationEntry],
+    t_ms: u64,
+    max_results: usize,
+) -> Vec<(i64, i64)> {
+    let t = t_ms as i64;
+    let mut all: Vec<(i64, i64)> = Vec::new();
+    for entry in rotation {
+        for cast in &entry.skills {
+            if cast.cast_time < 0 { continue; }
+            if cast.cast_time > t { continue; }
+            all.push((entry.id, cast.cast_time));
+        }
+    }
+    all.sort_by(|a, b| b.1.cmp(&a.1));
+    all.truncate(max_results);
+    all
+}
+
 /// Reset playback to t=0, paused, when the rendered fight changes.
 /// Returns the (possibly updated) (time_ms, playing, speed) tuple.
 #[cfg(windows)]
