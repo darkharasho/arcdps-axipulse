@@ -9,6 +9,7 @@ pub mod ei_model;
 pub mod ei_parser;
 pub mod ei_settings;
 pub mod fight_composition;
+pub mod hotkey;
 pub mod pulse_metrics;
 pub mod self_identify;
 pub mod squad_rank;
@@ -35,4 +36,6 @@ arcdps::export! {
     release: plugin::release,
     imgui: plugin::imgui,
     options_windows: plugin::options_windows,
+    options_end: plugin::options_end,
+    wnd_nofilter: plugin::wnd_nofilter,
 }

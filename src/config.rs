@@ -17,6 +17,9 @@ pub struct Config {
     pub timeline_pos: Option<(f32, f32)>,
     /// Per-lane visibility toggles for the Timeline.
     pub timeline_layers: TimelineLayers,
+    /// Chord string (e.g. "Ctrl+Shift+P") that toggles the AxiPulse
+    /// window. Empty = no hotkey bound.
+    pub toggle_visibility_hotkey: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +56,7 @@ impl Default for Config {
             show_timeline: true,
             timeline_pos: None,
             timeline_layers: TimelineLayers::default(),
+            toggle_visibility_hotkey: String::new(),
         }
     }
 }

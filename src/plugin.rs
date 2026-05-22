@@ -92,6 +92,101 @@ pub fn options_windows(ui: &arcdps::imgui::Ui, window_name: Option<&str>) -> boo
     false
 }
 
+pub fn options_end(ui: &arcdps::imgui::Ui) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Ok(mut c) = G.config.lock() {
+            crate::ui::options::render_options_end(ui, &mut c);
+        }
+    }));
+}
+
+/// Which hotkey slot the options window is currently rebinding. The
+/// next non-modifier keystroke in `wnd_nofilter` captures the chord.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingTarget {
+    ToggleVisibility,
+}
+
+static BINDING: Mutex<Option<BindingTarget>> = Mutex::new(None);
+
+pub fn request_bind(target: BindingTarget) {
+    if let Ok(mut g) = BINDING.lock() { *g = Some(target); }
+}
+
+pub fn binding_in_progress() -> Option<BindingTarget> {
+    BINDING.lock().ok().and_then(|g| *g)
+}
+
+pub fn cancel_binding() {
+    if let Ok(mut g) = BINDING.lock() { *g = None; }
+}
+
+fn take_binding() -> Option<BindingTarget> {
+    BINDING.lock().ok().and_then(|mut g| g.take())
+}
+
+pub fn wnd_nofilter(key: usize, key_down: bool, prev_key_down: bool) -> bool {
+    if !key_down || prev_key_down { return true; }
+    let needs_processing = binding_in_progress().is_some() || {
+        match G.config.lock() {
+            Ok(c) => !c.toggle_visibility_hotkey.is_empty(),
+            Err(_) => false,
+        }
+    };
+    if !needs_processing { return true; }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wnd_nofilter_inner(key)
+    }));
+    result.unwrap_or(true)
+}
+
+fn wnd_nofilter_inner(key: usize) -> bool {
+    let ctrl = key_down_async(0x11);
+    let shift = key_down_async(0x10);
+    let alt = key_down_async(0x12);
+
+    if let Some(target) = binding_in_progress() {
+        let Some(combo) = crate::hotkey::format_keypress(key as u32, ctrl, shift, alt) else {
+            return false;
+        };
+        let _ = take_binding();
+        if let Ok(mut c) = G.config.lock() {
+            match target {
+                BindingTarget::ToggleVisibility => c.toggle_visibility_hotkey = combo,
+            }
+            c.save();
+        }
+        return false;
+    }
+
+    let toggle_str = match G.config.lock() {
+        Ok(c) => c.toggle_visibility_hotkey.clone(),
+        Err(_) => return true,
+    };
+    let pressed = |s: &str| -> bool {
+        let Some(hk) = crate::hotkey::Hotkey::parse(s) else { return false };
+        crate::hotkey::matches(&hk, key as u32, ctrl, shift, alt)
+    };
+    if pressed(&toggle_str) {
+        if let Ok(mut c) = G.config.lock() {
+            c.show_pulse = !c.show_pulse;
+            c.save();
+        }
+        return false;
+    }
+    true
+}
+
+fn key_down_async(vk: i32) -> bool {
+    unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 }
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetAsyncKeyState(vk: i32) -> i16;
+}
+
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// How many `on_new_log` invocations are currently parsing. UI reads
