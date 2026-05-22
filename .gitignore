@@ -2,3 +2,6 @@
 /vendor/GW2EICLI.zip
 /fixtures/sample-fight.json
 /vendor/dotnet-runtime-win-x64.zip
+
+# WvW map tiles downloaded by scripts/fetch_tiles.sh (sidecar asset, not in source)
+src/assets/tiles/
