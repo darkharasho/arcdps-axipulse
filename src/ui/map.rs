@@ -304,7 +304,7 @@ fn render_party_panel(
     );
     y += 18.0;
 
-    let row_h = 82.0_f32;
+    let row_h = 108.0_f32;
     let polling_rate = json
         .combat_replay_meta_data
         .as_ref()
@@ -417,6 +417,41 @@ fn render_party_panel(
             }
             bx += icon_px + gap;
             if bx + icon_px > panel_origin[0] + panel_size[0] - pad { break; }
+        }
+
+        // Recent skill casts (last 4, newest first, latest larger).
+        let skills = recent_skill_casts(&p.rotation, time_ms, 4);
+        if !skills.is_empty() {
+            let skill_px = 18.0_f32;
+            let mut sx = name_x;
+            let sy = by + 22.0; // below the boon row
+            let latest_hold_ms: i64 = 1200;
+            let latest_fade_ms: i64 = 2500;
+            let fade_ms: i64 = 1500;
+            let t = time_ms as i64;
+            for (i, (id, cast_t)) in skills.iter().enumerate() {
+                let age = t - cast_t;
+                let opacity: f32 = if i == 0 {
+                    if age <= latest_hold_ms { 1.0 }
+                    else if age <= latest_hold_ms + latest_fade_ms {
+                        1.0 - (age - latest_hold_ms) as f32 / latest_fade_ms as f32
+                    } else { 0.0 }
+                } else {
+                    if age >= fade_ms { 0.0 } else { 1.0 - age as f32 / fade_ms as f32 }
+                };
+                if opacity <= 0.0 { continue; }
+                let icon = crate::ui::icons::lookup(
+                    json,
+                    crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Skill, id: *id },
+                );
+                if let Some(handle) = icon {
+                    draw.add_image(handle.tex, [sx, sy], [sx + skill_px, sy + skill_px])
+                        .col([1.0, 1.0, 1.0, opacity])
+                        .build();
+                }
+                sx += skill_px + 2.0;
+                if sx + skill_px > panel_origin[0] + panel_size[0] - pad { break; }
+            }
         }
 
         y += row_h + 4.0;
