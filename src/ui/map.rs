@@ -304,7 +304,7 @@ fn render_party_panel(
     );
     y += 18.0;
 
-    let row_h = 56.0_f32;
+    let row_h = 82.0_f32;
     let polling_rate = json
         .combat_replay_meta_data
         .as_ref()
@@ -386,6 +386,38 @@ fn render_party_panel(
                 .filled(true).rounding(2.0).build();
         }
         draw.add_text([bar_x0 + 4.0, bar_y0 + bar_h + 2.0], [0.78, 0.78, 0.85, 1.0], &label);
+
+        // Boon stack tiles.
+        let icon_px = 18.0_f32;
+        let gap = 2.0_f32;
+        let mut bx = name_x;
+        let by = bar_y0 + bar_h + 18.0;
+        for boon_id in crate::map::boon_panel::PANEL_BOON_ORDER {
+            let stacks = p.buff_uptimes.iter()
+                .find(|b| b.id == *boon_id)
+                .map(|b| boon_stacks_at(&b.states, time_ms))
+                .unwrap_or(0);
+            if stacks == 0 { continue; }
+            let icon = crate::ui::icons::lookup(
+                json,
+                crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Buff, id: *boon_id },
+            );
+            if let Some(handle) = icon {
+                draw.add_image(handle.tex, [bx, by], [bx + icon_px, by + icon_px]).build();
+            } else {
+                draw.add_rect([bx, by], [bx + icon_px, by + icon_px], [1.0, 1.0, 1.0, 0.15])
+                    .filled(true).rounding(3.0).build();
+            }
+            if stacks > 1 {
+                draw.add_text(
+                    [bx + icon_px - 8.0, by + icon_px - 10.0],
+                    [0.97, 0.97, 1.0, 1.0],
+                    format!("{stacks}"),
+                );
+            }
+            bx += icon_px + gap;
+            if bx + icon_px > panel_origin[0] + panel_size[0] - pad { break; }
+        }
 
         y += row_h + 4.0;
         if y > panel_origin[1] + panel_size[1] - row_h { break; }

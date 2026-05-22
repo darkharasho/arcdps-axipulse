@@ -4,3 +4,4 @@
 
 pub mod wvw;
 pub mod tiles;
+pub mod boon_panel;
