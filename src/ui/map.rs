@@ -1,20 +1,65 @@
-#![cfg(windows)]
 //! WvW combat-replay map view. MVP: static final-frame render of
 //! squad positions on top of tile background + landmark pins.
 
+#[cfg(windows)]
 use arcdps::imgui::Ui;
 
+#[cfg(windows)]
 use crate::derived::Derived;
+#[cfg(windows)]
 use crate::ei_model::EiJson;
+#[cfg(windows)]
 use crate::map::tiles::{get_map_tiles, map_pixel_size};
+#[cfg(windows)]
 use crate::map::wvw::{landmarks, resolve_map_from_zone, LandmarkType};
+#[cfg(windows)]
 use crate::ui::tile_cache::{self, TileKey};
 
+#[cfg(windows)]
 const MVP_TILE_ZOOM: u32 = 5;
 
+#[cfg(windows)]
 const BG_DARK:   [f32; 4] = [0.04, 0.05, 0.07, 1.0];
+#[cfg(windows)]
 const TEXT_MUTED:[f32; 4] = [0.55, 0.58, 0.65, 1.0];
 
+/// Linearly interpolate between two adjacent position samples.
+///
+/// `samples` is the raw `combat_replay_data.positions` vec: each entry
+/// is `[x, y]` (or longer; we only read indices 0 and 1).
+/// `t_ms` is elapsed time since fight start. `polling_rate_ms` is the
+/// EI sample spacing.
+///
+/// Returns `None` if `samples` is empty or the resolved sample is
+/// malformed (fewer than 2 components). Clamps to the last sample for
+/// times past the end. A zero polling rate returns the first sample.
+pub fn lerp_position(samples: &[Vec<f64>], t_ms: u64, polling_rate_ms: u64) -> Option<(f64, f64)> {
+    if samples.is_empty() {
+        return None;
+    }
+    if polling_rate_ms == 0 || samples.len() == 1 {
+        let s = &samples[0];
+        if s.len() < 2 { return None; }
+        return Some((s[0], s[1]));
+    }
+    let last_idx = samples.len() - 1;
+    let f_idx = (t_ms as f64) / (polling_rate_ms as f64);
+    let idx = (f_idx.floor() as usize).min(last_idx);
+    let frac = (f_idx - (idx as f64)).clamp(0.0, 1.0);
+    let a = &samples[idx];
+    if a.len() < 2 { return None; }
+    if idx >= last_idx {
+        return Some((a[0], a[1]));
+    }
+    let b = &samples[idx + 1];
+    if b.len() < 2 { return None; }
+    Some((
+        a[0] + (b[0] - a[0]) * frac,
+        a[1] + (b[1] - a[1]) * frac,
+    ))
+}
+
+#[cfg(windows)]
 #[allow(dead_code)]
 struct PlayerDot<'a> {
     name: &'a str,
@@ -24,6 +69,7 @@ struct PlayerDot<'a> {
     is_self: bool,
 }
 
+#[cfg(windows)]
 fn collect_final_positions<'a>(json: &'a EiJson, self_idx: usize) -> Vec<PlayerDot<'a>> {
     let mut out = Vec::new();
     for (i, p) in json.players.iter().enumerate() {
@@ -41,6 +87,7 @@ fn collect_final_positions<'a>(json: &'a EiJson, self_idx: usize) -> Vec<PlayerD
     out
 }
 
+#[cfg(windows)]
 pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived) {
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
