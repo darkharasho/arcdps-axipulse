@@ -44,16 +44,11 @@ static SRVS: Lazy<Mutex<Vec<ID3D11ShaderResourceView>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 
 fn assets_root() -> Option<PathBuf> {
-    crate::plugin::install_root()
-        .map(|p| {
-            let mut buf = p;
-            // If install_root points at the DLL file itself, parent it.
-            if buf.is_file() {
-                if let Some(parent) = buf.parent() { buf = parent.to_path_buf(); }
-            }
-            buf.push("axipulse-assets");
-            buf.push("tiles");
-            buf
+    crate::plugin::dll_dir()
+        .map(|mut p| {
+            p.push("axipulse-assets");
+            p.push("tiles");
+            p
         })
         .filter(|p| p.exists())
 }

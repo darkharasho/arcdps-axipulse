@@ -224,6 +224,40 @@ pub fn install_root() -> Option<std::path::PathBuf> {
     G.install_root.lock().ok().and_then(|g| g.clone())
 }
 
+/// Directory containing the loaded `arcdps_axipulse.dll` (e.g.
+/// `<gw2>/addons/`). Resolved lazily on first call via the standard
+/// `GetModuleHandleExW(FROM_ADDRESS) + GetModuleFileNameW` Windows
+/// idiom. Used by the tile cache to find sidecar assets at
+/// `<dll_dir>/axipulse-assets/tiles/` (placed there by deploy.sh).
+///
+/// Returns `None` only if the Windows API call fails — should never
+/// happen in practice once the DLL is loaded.
+pub fn dll_dir() -> Option<std::path::PathBuf> {
+    use once_cell::sync::Lazy;
+    static DLL_DIR: Lazy<Option<std::path::PathBuf>> = Lazy::new(resolve_dll_dir);
+    DLL_DIR.clone()
+}
+
+fn resolve_dll_dir() -> Option<std::path::PathBuf> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+    };
+    let mut hmod = HMODULE::default();
+    // Use a function inside our crate as the "address" anchor.
+    let anchor = resolve_dll_dir as *const () as *const u16;
+    unsafe {
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, PCWSTR(anchor), &mut hmod).ok()?;
+    }
+    let mut buf = [0u16; 32768];
+    let len = unsafe { GetModuleFileNameW(Some(hmod), &mut buf) } as usize;
+    if len == 0 { return None; }
+    let path_str = String::from_utf16(&buf[..len]).ok()?;
+    let path = std::path::PathBuf::from(path_str);
+    path.parent().map(|p| p.to_path_buf())
+}
+
 /// Last successfully-parsed fight: `(label, when)`. Drives the
 /// "Parsed: …" toast in the notifier window so users can see logs
 /// arrive without keeping the main AxiPulse window open. Wrapped in
