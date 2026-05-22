@@ -100,6 +100,82 @@ fn sync_fight_key(current: &PathBuf) -> (u64, bool, f32) {
     (guard.time_ms, guard.playing, guard.speed)
 }
 
+/// Advance `time_ms` by the current frame delta while `playing` is true.
+/// Auto-pauses at duration_ms. Returns the current time_ms after the tick.
+#[cfg(windows)]
+fn tick_playback(ui: &Ui, duration_ms: u64) -> u64 {
+    let mut guard = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+    if guard.playing && duration_ms > 0 {
+        let delta_ms = (ui.io().delta_time * 1000.0 * guard.speed) as i64;
+        let next = (guard.time_ms as i64).saturating_add(delta_ms).max(0) as u64;
+        if next >= duration_ms {
+            guard.time_ms = duration_ms;
+            guard.playing = false;
+        } else {
+            guard.time_ms = next;
+        }
+    }
+    guard.time_ms
+}
+
+#[cfg(windows)]
+fn render_controls(ui: &Ui, duration_ms: u64) {
+    // Snapshot state up front so we don't hold the lock across imgui calls.
+    let (cur_time, playing, speed) = {
+        let g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        (g.time_ms, g.playing, g.speed)
+    };
+
+    // Play / Pause button.
+    let play_label = if playing { "Pause" } else { "Play" };
+    if ui.button(play_label) {
+        let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        if !g.playing && g.time_ms >= duration_ms && duration_ms > 0 {
+            g.time_ms = 0;
+        }
+        g.playing = !g.playing;
+    }
+    ui.same_line();
+
+    // Speed cycle button.
+    let speed_label = format!("{:.1}x", speed);
+    if ui.button(&speed_label) {
+        let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        g.speed = match g.speed {
+            x if x < 0.75 => 1.0,
+            x if x < 1.25 => 1.5,
+            x if x < 1.75 => 2.0,
+            _             => 0.5,
+        };
+    }
+    ui.same_line();
+
+    // M:SS / M:SS time label.
+    let label = format!("{} / {}", mmss(cur_time), mmss(duration_ms));
+    ui.text(&label);
+    ui.same_line();
+
+    // Scrubber — fills remaining width.
+    let avail = ui.content_region_avail()[0].max(80.0);
+    ui.set_next_item_width(avail);
+    let mut slider_val: i32 = cur_time.min(i32::MAX as u64) as i32;
+    let max_val = duration_ms.min(i32::MAX as u64) as i32;
+    if ui.slider_config("##map-scrubber", 0_i32, max_val)
+        .display_format("")
+        .build(&mut slider_val)
+    {
+        let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        g.time_ms = slider_val.max(0) as u64;
+        g.playing = false;
+    }
+}
+
+#[cfg(windows)]
+fn mmss(ms: u64) -> String {
+    let s = ms / 1000;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
 #[cfg(windows)]
 #[allow(dead_code)]
 struct PlayerDot<'a> {
@@ -132,7 +208,9 @@ fn collect_final_positions<'a>(json: &'a EiJson, self_idx: usize) -> Vec<PlayerD
 pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, log_path: &std::path::PathBuf) {
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
-    let (_time_ms, _playing, _speed) = sync_fight_key(log_path);
+    let _ = sync_fight_key(log_path);
+    let duration_ms = json.duration_ms;
+    let _time_ms = tick_playback(ui, duration_ms);
 
     // Resolve which WvW map this fight took place on. EI populates
     // `zone`/`map_name` for some encounters but leaves them empty for
@@ -218,5 +296,13 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                     draw.add_circle([cx, cy], r, color).filled(true).build();
                 }
             }
+
+            // Pin the controls row to the bottom of the child window.
+            let remaining = ui.content_region_avail();
+            let row_h = ui.frame_height_with_spacing();
+            if remaining[1] > row_h {
+                ui.dummy([0.0, remaining[1] - row_h]);
+            }
+            render_controls(ui, duration_ms);
         });
 }
