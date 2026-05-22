@@ -11,7 +11,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use notify::{Event, EventKind, RecursiveMode, Watcher};
+use notify::{Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
 
 pub fn spawn_watcher<F>(cbtlogs_dir: PathBuf, on_log: F) -> std::io::Result<()>
 where
@@ -41,7 +41,12 @@ where
 
 fn run(dir: PathBuf, tx_work: mpsc::Sender<PathBuf>) {
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-    let mut watcher = match notify::recommended_watcher(tx) {
+    // notify's recommended (inotify on Linux, ReadDirectoryChangesW on
+    // Windows) misses arcdps's rename-from-temp under Wine, so logs
+    // never reach us. PollWatcher walks the directory on a fixed
+    // interval — slower to react but never misses a file.
+    let cfg = Config::default().with_poll_interval(Duration::from_secs(2));
+    let mut watcher = match PollWatcher::new(tx, cfg) {
         Ok(w) => w,
         Err(e) => { log::warn!("axipulse watcher init failed: {e}"); return; }
     };
@@ -49,26 +54,48 @@ fn run(dir: PathBuf, tx_work: mpsc::Sender<PathBuf>) {
         log::warn!("axipulse watcher cannot watch {dir:?}: {e}");
         return;
     }
-    log::warn!("axipulse watcher started on {dir:?}");
+    log::warn!("axipulse watcher started on {dir:?} (poll mode, 2s)");
 
-    // arcdps fires Modify events continuously while a fight log is being
-    // written; reacting to those spawned EI subprocesses mid-combat under
-    // Wine, which was visible as game stutter. Restricting to Create on
-    // the finished `.zevtc` only triggers us once per fight.
+    // Seed `seen` with every `.zevtc` already present so we don't
+    // re-parse the entire backlog on startup. PollWatcher's first scan
+    // emits Create events for the baseline set.
     let mut seen: HashSet<PathBuf> = HashSet::new();
+    seed_existing(&dir, &mut seen);
 
     for res in rx {
         let Ok(event) = res else { continue };
-        if !matches!(event.kind, EventKind::Create(_)) { continue; }
+        // PollWatcher surfaces new files as Create; rename-into and
+        // direct writes can come through as Modify(_) too. Accept both
+        // (the seen-set dedups; `await_stable` handles partial files).
+        if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+            continue;
+        }
         for path in event.paths {
             if !is_zevtc(&path) { continue; }
             if !seen.insert(path.clone()) { continue; }
+            log::warn!("axipulse watcher: new log {path:?}");
             if tx_work.send(path).is_err() {
                 log::warn!("axipulse: parser worker gone, watcher exiting");
                 return;
             }
         }
     }
+}
+
+fn seed_existing(dir: &Path, seen: &mut HashSet<PathBuf>) {
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if is_zevtc(&p) {
+                seen.insert(p);
+            }
+        }
+    }
+    log::warn!("axipulse watcher: seeded {} existing logs", seen.len());
 }
 
 fn is_zevtc(p: &Path) -> bool {

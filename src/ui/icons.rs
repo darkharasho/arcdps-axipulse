@@ -203,8 +203,13 @@ pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
     }
     // First sighting — resolve URL.
     let url = match key.kind {
+        // Damage entries from condi/boon procs (Burning, Bleeding, …)
+        // carry a buff ID and won't appear in skill_map — fall back to
+        // buff_map so the icon still resolves.
         IconKind::Skill => json.skill_map.get(&format!("s{}", key.id))
-            .and_then(|e| e.icon.clone()),
+            .and_then(|e| e.icon.clone())
+            .or_else(|| json.buff_map.get(&format!("b{}", key.id))
+                .and_then(|e| e.icon.clone())),
         IconKind::Buff  => json.buff_map.get(&format!("b{}", key.id))
             .and_then(|e| e.icon.clone()),
     };

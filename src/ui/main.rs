@@ -105,7 +105,7 @@ fn render_header(ui: &Ui, state: &AppState) {
     let cursor = ui.cursor_screen_pos();
     let row_h = 28.0;
     let avail = ui.content_region_avail()[0].max(200.0);
-    let combo_w = 280.0_f32.min(avail * 0.55);
+    let combo_w = 380.0_f32.min(avail * 0.65);
 
     // --- Left content (logo + wordmark + optional parsing indicator) ---
     let logo = crate::ui::icons::lookup_bundled("__logo__");
@@ -227,9 +227,11 @@ fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
     for offset in 0..history_len {
         let i = history_len - 1 - offset;
         if let Some(rec) = state.history(i) {
+            // F1 = oldest fight in history, FN = most recent past fight.
+            let fight_no = i + 1;
             labels.push(format!(
-                "-{}  \u{00b7} {} \u{00b7} {} \u{00b7} {} players",
-                offset + 1,
+                "F{}  \u{00b7} {} \u{00b7} {} \u{00b7} {} players",
+                fight_no,
                 mmss(rec.data.duration_ms),
                 short_fight_name(&rec.data.fight_name),
                 rec.data.players.len(),

@@ -463,14 +463,21 @@ fn ordinal(n: u32) -> String {
     format!("{n}{suffix}")
 }
 
-/// Look up a skill's display name in the EI top-level `skill_map`.
-/// EI emits `totalDamageDist[].name` empty in WvW. Falls back to
-/// "Skill <id>" if the map is missing or only contains a numeric name.
+/// Look up a skill's display name in the EI top-level `skill_map`,
+/// falling back to `buff_map` (condi/boon damage entries — e.g.
+/// Burning, Bleeding — have buff IDs, not skill IDs). EI emits
+/// `totalDamageDist[].name` empty in WvW so these maps are the
+/// authoritative source. Final fallback is "Skill <id>".
 fn resolve_skill_name(json: &EiJson, id: i64, fallback: &str) -> String {
     if !fallback.is_empty() && fallback.parse::<i64>().is_err() {
         return fallback.to_string();
     }
     if let Some(entry) = json.skill_map.get(&format!("s{id}")) {
+        if !entry.name.is_empty() && entry.name.parse::<i64>().is_err() {
+            return entry.name.clone();
+        }
+    }
+    if let Some(entry) = json.buff_map.get(&format!("b{id}")) {
         if !entry.name.is_empty() && entry.name.parse::<i64>().is_err() {
             return entry.name.clone();
         }

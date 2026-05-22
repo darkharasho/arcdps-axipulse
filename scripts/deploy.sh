@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SRC="target/x86_64-pc-windows-msvc/release/arcdps_axipulse.dll"
-DEST="${AXIPULSE_DEPLOY_DEST:-$HOME/Games/guild-wars-2/drive_c/Program Files/Guild Wars 2/bin64/arcdps_axipulse.dll}"
+DEST="${AXIPULSE_DEPLOY_DEST:-/var/mnt/data/SteamLibrary/steamapps/common/Guild Wars 2/addons/arcdps_axipulse.dll}"
 
 if [[ ! -f "$SRC" ]]; then
     echo "build artifact missing: $SRC — run 'cargo dll' first" >&2
