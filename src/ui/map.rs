@@ -268,9 +268,9 @@ fn tick_playback(ui: &Ui, duration_ms: u64) -> u64 {
 #[cfg(windows)]
 fn render_controls(ui: &Ui, duration_ms: u64) {
     // Snapshot state up front so we don't hold the lock across imgui calls.
-    let (cur_time, playing, speed, panel_open) = {
+    let (cur_time, playing, speed, panel_open, follow) = {
         let g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
-        (g.time_ms, g.playing, g.speed, g.show_party_panel)
+        (g.time_ms, g.playing, g.speed, g.show_party_panel, g.follow_player)
     };
 
     // Play / Pause button.
@@ -301,6 +301,17 @@ fn render_controls(ui: &Ui, duration_ms: u64) {
     if ui.button(party_label) {
         let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
         g.show_party_panel = !g.show_party_panel;
+    }
+    ui.same_line();
+    let follow_label = if follow { "Follow*" } else { "Follow " };
+    if ui.button(follow_label) {
+        let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        g.follow_player = !g.follow_player;
+    }
+    ui.same_line();
+    if ui.button("Reset") {
+        let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        g.reset_view();
     }
     ui.same_line();
 
@@ -600,10 +611,10 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
     let _ = sync_fight_key(log_path);
     let duration_ms = json.duration_ms;
     let time_ms = tick_playback(ui, duration_ms);
-    let (user_scale, pan_x, pan_y) = {
-        let g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
-        (g.user_scale, g.pan_x, g.pan_y)
-    };
+    // user_scale is read here for fit_scale * user_scale; pan_x/pan_y
+    // are re-read inside the closure (after the Follow override) so we
+    // discard them at the outer level.
+    let user_scale = PLAYBACK.lock().expect("PLAYBACK mutex poisoned").user_scale;
 
     // Resolve which WvW map this fight took place on. EI populates
     // `zone`/`map_name` for some encounters but leaves them empty for
@@ -634,6 +645,23 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             // open, overlays the left 260 px on top of the map.
             let fit_scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
             let scale = fit_scale * user_scale;
+            // If Follow is on, override pan so the local player lands at
+            // the fit centre this frame.
+            let (user_scale, pan_x, pan_y) = {
+                let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+                if g.follow_player {
+                    let polling_rate = json.combat_replay_meta_data
+                        .as_ref().and_then(|m| m.polling_rate).unwrap_or(150);
+                    let local_pos = json.players.get(idx)
+                        .and_then(|p| p.combat_replay_data.as_ref())
+                        .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
+                    if let Some((wx, wy)) = local_pos {
+                        g.pan_x = (mw * 0.5 - wx as f32) * scale;
+                        g.pan_y = (mh * 0.5 - wy as f32) * scale;
+                    }
+                }
+                (g.user_scale, g.pan_x, g.pan_y)
+            };
             let render_w = mw * scale;
             let render_h = mh * scale;
             let origin = ui.cursor_screen_pos();
