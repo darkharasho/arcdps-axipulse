@@ -42,6 +42,10 @@ struct MapPlayback {
     /// When true, every frame re-pins the pan so the local player sits
     /// at the centre of the visible map area.
     follow_player: bool,
+    /// Set when a new fight is rendered; the next frame computes the
+    /// squad centroid + auto-zooms so the squad fills the viewport.
+    /// Cleared after the auto-centre runs once. Reset by reset_view too.
+    needs_initial_centre: bool,
 }
 
 #[cfg(windows)]
@@ -57,6 +61,7 @@ impl MapPlayback {
             pan_x: 0.0,
             pan_y: 0.0,
             follow_player: false,
+            needs_initial_centre: true,
         }
     }
     /// Restore the view to its default (fit-to-window, no pan, no follow).
@@ -65,6 +70,7 @@ impl MapPlayback {
         self.pan_x = 0.0;
         self.pan_y = 0.0;
         self.follow_player = false;
+        self.needs_initial_centre = true;
     }
 }
 
@@ -644,24 +650,54 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             // Map gets the full child-window area. The party panel, when
             // open, overlays the left 260 px on top of the map.
             let fit_scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
-            let scale = fit_scale * user_scale;
-            // If Follow is on, override pan so the local player lands at
-            // the fit centre this frame.
+            // Handle needs_initial_centre and follow_player overrides.
+            // Both can mutate user_scale/pan; we read final values after.
+            let _ = user_scale; // shadowed below
             let (user_scale, pan_x, pan_y) = {
                 let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+                let polling_rate = json.combat_replay_meta_data
+                    .as_ref().and_then(|m| m.polling_rate).unwrap_or(150);
+
+                if g.needs_initial_centre {
+                    // Centroid of the local player's group at t=0; auto-zoom
+                    // so the squad fills the viewport instead of starting
+                    // fit-to-window on a vast empty map.
+                    let local_group = json.players.get(idx).map(|p| p.group).unwrap_or(-1);
+                    let mut sum_x = 0.0_f64;
+                    let mut sum_y = 0.0_f64;
+                    let mut count = 0_u32;
+                    for p in &json.players {
+                        if p.group != local_group || p.not_in_squad { continue; }
+                        if let Some(rd) = p.combat_replay_data.as_ref() {
+                            if let Some((x, y)) = lerp_position(&rd.positions, 0, polling_rate) {
+                                sum_x += x; sum_y += y; count += 1;
+                            }
+                        }
+                    }
+                    if count > 0 {
+                        let cx = (sum_x / count as f64) as f32;
+                        let cy = (sum_y / count as f64) as f32;
+                        g.user_scale = 3.0;
+                        let s = fit_scale * g.user_scale;
+                        g.pan_x = (mw * 0.5 - cx) * s;
+                        g.pan_y = (mh * 0.5 - cy) * s;
+                    }
+                    g.needs_initial_centre = false;
+                }
+
                 if g.follow_player {
-                    let polling_rate = json.combat_replay_meta_data
-                        .as_ref().and_then(|m| m.polling_rate).unwrap_or(150);
                     let local_pos = json.players.get(idx)
                         .and_then(|p| p.combat_replay_data.as_ref())
                         .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
                     if let Some((wx, wy)) = local_pos {
-                        g.pan_x = (mw * 0.5 - wx as f32) * scale;
-                        g.pan_y = (mh * 0.5 - wy as f32) * scale;
+                        let s = fit_scale * g.user_scale;
+                        g.pan_x = (mw * 0.5 - wx as f32) * s;
+                        g.pan_y = (mh * 0.5 - wy as f32) * s;
                     }
                 }
                 (g.user_scale, g.pan_x, g.pan_y)
             };
+            let scale = fit_scale * user_scale;
             let render_w = mw * scale;
             let render_h = mh * scale;
             let origin = ui.cursor_screen_pos();
