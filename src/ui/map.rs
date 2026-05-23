@@ -35,6 +35,15 @@ struct MapPlayback {
     speed: f32,
     fight_key: Option<PathBuf>,
     show_party_panel: bool,
+    /// User zoom multiplier on top of the fit-to-window scale.
+    /// 1.0 = exactly fits; >1.0 = zoomed in.
+    user_scale: f32,
+    /// Pan offset in screen pixels, applied to the fit origin.
+    pan_x: f32,
+    pan_y: f32,
+    /// When true, every frame re-pins the pan so the local player sits
+    /// at the centre of the visible map area.
+    follow_player: bool,
 }
 
 #[cfg(windows)]
@@ -46,7 +55,18 @@ impl MapPlayback {
             speed: 1.0,
             fight_key: None,
             show_party_panel: false,
+            user_scale: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            follow_player: false,
         }
+    }
+    /// Restore the view to its default (fit-to-window, no pan, no follow).
+    fn reset_view(&mut self) {
+        self.user_scale = 1.0;
+        self.pan_x = 0.0;
+        self.pan_y = 0.0;
+        self.follow_player = false;
     }
 }
 
@@ -186,6 +206,7 @@ fn sync_fight_key(current: &PathBuf) -> (u64, bool, f32) {
         guard.fight_key = Some(current.clone());
         guard.time_ms = 0;
         guard.playing = false;
+        guard.reset_view();
     }
     (guard.time_ms, guard.playing, guard.speed)
 }
