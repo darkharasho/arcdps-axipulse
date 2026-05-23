@@ -669,7 +669,15 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                     g.follow_player = false;
                 }
             }
-            let _ = hit_active; // used in P4.T5
+            if hit_active {
+                let delta = ui.io().mouse_delta;
+                if delta[0] != 0.0 || delta[1] != 0.0 {
+                    let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+                    g.pan_x += delta[0];
+                    g.pan_y += delta[1];
+                    g.follow_player = false;
+                }
+            }
 
             let draw = ui.get_window_draw_list();
 
