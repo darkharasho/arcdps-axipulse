@@ -278,7 +278,7 @@ fn render_party_panel(
 ) {
     let draw = ui.get_window_draw_list();
 
-    // Panel background spans the full width above the map.
+    // Panel background (overlays on top of the map below).
     let bg = [0.08, 0.10, 0.13, 0.92];
     draw.add_rect(
         panel_origin,
@@ -299,37 +299,19 @@ fn render_party_panel(
         .and_then(|m| m.polling_rate)
         .unwrap_or(150);
 
-    let members: Vec<(usize, &crate::ei_model::EiPlayer)> = json.players.iter().enumerate()
-        .filter(|(_, p)| p.group == local_group && !p.not_in_squad)
-        .collect();
-    if members.is_empty() { return; }
+    let pad = 10.0_f32;
+    let mut y = panel_origin[1] + pad;
+    draw.add_text(
+        [panel_origin[0] + pad, y],
+        [0.55, 0.58, 0.65, 1.0],
+        "PARTY",
+    );
+    y += 18.0;
+    let row_h = 108.0_f32;
 
-    let pad = 4.0_f32;
-    let row_h = 26.0_f32;
-    // Inline section widths (left-to-right): icon | name | dist | hp_bar | hp_lbl | boons | skills.
-    // Compute fixed slot widths; the HP bar takes whatever's left.
-    let icon_w = 20.0_f32;
-    let name_w = 96.0_f32;
-    let dist_w = 36.0_f32;
-    let hp_lbl_w = 36.0_f32;
-    let boon_px = 14.0_f32;
-    let skill_px = 14.0_f32;
-    let boon_strip_w = boon_px * 6.0 + 5.0 * 2.0; // up to 6 boons
-    let skill_strip_w = skill_px * 4.0 + 3.0 * 2.0; // up to 4 skills
-    let inter = 6.0_f32; // gap between sections
-    let panel_inner_w = panel_size[0] - pad * 2.0;
-
-    for (slot, (i, p)) in members.iter().enumerate() {
-        let ry0 = panel_origin[1] + pad + (slot as f32) * row_h;
-        let ry1 = ry0 + row_h - 2.0;
-        if ry1 > panel_origin[1] + panel_size[1] - pad { break; }
-
-        // Row background.
-        draw.add_rect(
-            [panel_origin[0] + pad, ry0],
-            [panel_origin[0] + pad + panel_inner_w, ry1],
-            [1.0, 1.0, 1.0, 0.03],
-        ).filled(true).rounding(3.0).build();
+    for (i, p) in json.players.iter().enumerate() {
+        if p.group != local_group { continue; }
+        if p.not_in_squad { continue; }
 
         let rd_pos = p.combat_replay_data.as_ref()
             .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
@@ -338,27 +320,27 @@ fn render_party_panel(
             .unwrap_or(MemberStatus::Alive);
         let hp = health_at(&p.health_percents, time_ms);
 
-        // Vertical center of the row for text/icons.
-        let row_mid = ry0 + (row_h - 2.0) * 0.5;
+        let row_y0 = y;
+        let row_y1 = y + row_h;
+        draw.add_rect(
+            [panel_origin[0] + 4.0, row_y0],
+            [panel_origin[0] + panel_size[0] - 4.0, row_y1],
+            [1.0, 1.0, 1.0, 0.04],
+        ).filled(true).rounding(4.0).build();
 
-        // Profession icon.
-        let icon_x = panel_origin[0] + pad + 4.0;
-        let icon_y = row_mid - icon_w * 0.5;
+        let icon_size = 20.0_f32;
+        let icon_x = panel_origin[0] + pad;
+        let icon_y = row_y0 + 6.0;
         if let Some(icon) = crate::ui::icons::lookup_bundled(p.profession.as_str()) {
-            draw.add_image(icon.tex, [icon_x, icon_y], [icon_x + icon_w, icon_y + icon_w]).build();
+            draw.add_image(icon.tex, [icon_x, icon_y], [icon_x + icon_size, icon_y + icon_size]).build();
         }
 
-        // Name (truncated to ~12 chars).
-        let name_x = icon_x + icon_w + inter;
-        let name_color = if *i == self_idx { [0.06, 0.72, 0.51, 1.0] }
+        let name_x = icon_x + icon_size + 8.0;
+        let name_color = if i == self_idx { [0.06, 0.72, 0.51, 1.0] }
             else if p.has_commander_tag { [0.96, 0.62, 0.04, 1.0] }
             else { [0.97, 0.97, 1.00, 1.0] };
-        let max_chars = (name_w / 7.5).max(4.0) as usize;
-        let short_name: String = p.name.chars().take(max_chars).collect();
-        draw.add_text([name_x, row_mid - 7.0], name_color, &short_name);
+        draw.add_text([name_x, icon_y + 2.0], name_color, p.name.as_str());
 
-        // Distance (or CMD badge).
-        let dist_x = name_x + name_w;
         if let (Some(cp), Some((px, py))) = (commander_pos, rd_pos) {
             if !p.has_commander_tag {
                 let dx = (px - cp.0) as f32;
@@ -368,43 +350,18 @@ fn render_party_panel(
                 let dist_color = if inches > 600 { [0.93, 0.27, 0.27, 1.0] }
                     else if inches > 300 { [0.96, 0.62, 0.04, 1.0] }
                     else { [0.13, 0.77, 0.37, 1.0] };
-                draw.add_text([dist_x, row_mid - 7.0], dist_color, format!("{}", inches));
-            } else {
-                draw.add_text([dist_x, row_mid - 7.0], [0.96, 0.62, 0.04, 1.0], "CMD");
+                draw.add_text(
+                    [panel_origin[0] + panel_size[0] - 50.0, icon_y + 2.0],
+                    dist_color,
+                    format!("{}", inches),
+                );
             }
         }
 
-        // Sections that get hidden as the row gets narrower:
-        // - skills strip drops first
-        // - then boons strip
-        // - then HP label
-        // - HP bar always present
-        let mut right_edge = panel_origin[0] + pad + panel_inner_w - 4.0;
-        let want_skills = right_edge - skill_strip_w >= dist_x + dist_w + inter + 80.0;
-        let skill_x = if want_skills {
-            let x = right_edge - skill_strip_w;
-            right_edge = x - inter;
-            x
-        } else { 0.0 };
-        let want_boons = right_edge - boon_strip_w >= dist_x + dist_w + inter + 70.0;
-        let boon_x = if want_boons {
-            let x = right_edge - boon_strip_w;
-            right_edge = x - inter;
-            x
-        } else { 0.0 };
-        let want_hp_lbl = right_edge - hp_lbl_w >= dist_x + dist_w + inter + 60.0;
-        let hp_lbl_x = if want_hp_lbl {
-            let x = right_edge - hp_lbl_w;
-            right_edge = x - 2.0;
-            x
-        } else { 0.0 };
-
-        // HP bar fills the remaining horizontal space.
-        let bar_x0 = dist_x + dist_w + inter;
-        let bar_x1 = right_edge.max(bar_x0 + 20.0);
-        let bar_w = (bar_x1 - bar_x0).max(20.0);
+        let bar_x0 = name_x;
+        let bar_y0 = row_y0 + 26.0;
+        let bar_w = panel_size[0] - (name_x - panel_origin[0]) - pad;
         let bar_h = 8.0;
-        let bar_y0 = row_mid - bar_h * 0.5;
         draw.add_rect([bar_x0, bar_y0], [bar_x0 + bar_w, bar_y0 + bar_h], [1.0, 1.0, 1.0, 0.08])
             .filled(true).rounding(2.0).build();
         let (fill_color, fill_frac, label): ([f32; 4], f32, String) = match status {
@@ -422,81 +379,79 @@ fn render_party_panel(
             draw.add_rect([bar_x0, bar_y0], [bar_x0 + fill_w, bar_y0 + bar_h], fill_color)
                 .filled(true).rounding(2.0).build();
         }
-        if want_hp_lbl {
-            draw.add_text([hp_lbl_x, row_mid - 7.0], [0.78, 0.78, 0.85, 1.0], &label);
+        draw.add_text([bar_x0 + 4.0, bar_y0 + bar_h + 2.0], [0.78, 0.78, 0.85, 1.0], &label);
+
+        // Boon stack tiles.
+        let boon_px = 18.0_f32;
+        let mut bx = name_x;
+        let by = bar_y0 + bar_h + 18.0;
+        for boon_id in crate::map::boon_panel::PANEL_BOON_ORDER {
+            let stacks = p.buff_uptimes.iter()
+                .find(|b| b.id == *boon_id)
+                .map(|b| boon_stacks_at(&b.states, time_ms))
+                .unwrap_or(0);
+            if stacks == 0 { continue; }
+            let icon = crate::ui::icons::lookup(
+                json,
+                crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Buff, id: *boon_id },
+            );
+            if let Some(handle) = icon {
+                draw.add_image(handle.tex, [bx, by], [bx + boon_px, by + boon_px]).build();
+            } else {
+                draw.add_rect([bx, by], [bx + boon_px, by + boon_px], [1.0, 1.0, 1.0, 0.15])
+                    .filled(true).rounding(3.0).build();
+            }
+            if stacks > 1 {
+                draw.add_text(
+                    [bx + boon_px - 8.0, by + boon_px - 10.0],
+                    [0.97, 0.97, 1.0, 1.0],
+                    format!("{stacks}"),
+                );
+            }
+            bx += boon_px + 2.0;
+            if bx + boon_px > panel_origin[0] + panel_size[0] - pad { break; }
         }
 
-        // Boon strip.
-        if want_boons {
-            let mut bx = boon_x;
-            let by = row_mid - boon_px * 0.5;
-            let max_x = boon_x + boon_strip_w;
-            for boon_id in crate::map::boon_panel::PANEL_BOON_ORDER {
-                let stacks = p.buff_uptimes.iter()
-                    .find(|b| b.id == *boon_id)
-                    .map(|b| boon_stacks_at(&b.states, time_ms))
-                    .unwrap_or(0);
-                if stacks == 0 { continue; }
+        // Recent skill casts.
+        let skills = recent_skill_casts(&p.rotation, time_ms, 4);
+        if !skills.is_empty() {
+            let skill_px = 18.0_f32;
+            let mut sx = name_x;
+            let sy = by + boon_px + 4.0;
+            let latest_hold_ms: i64 = 1200;
+            let latest_fade_ms: i64 = 2500;
+            let fade_ms: i64 = 1500;
+            let t = time_ms as i64;
+            for (idx_s, (id, cast_t)) in skills.iter().enumerate() {
+                let age = t - cast_t;
+                let opacity: f32 = if idx_s == 0 {
+                    if age <= latest_hold_ms { 1.0 }
+                    else if age <= latest_hold_ms + latest_fade_ms {
+                        1.0 - (age - latest_hold_ms) as f32 / latest_fade_ms as f32
+                    } else { 0.0 }
+                } else {
+                    if age >= fade_ms { 0.0 } else { 1.0 - age as f32 / fade_ms as f32 }
+                };
+                if opacity <= 0.0 { continue; }
                 let icon = crate::ui::icons::lookup(
                     json,
-                    crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Buff, id: *boon_id },
+                    crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Skill, id: *id },
                 );
                 if let Some(handle) = icon {
-                    draw.add_image(handle.tex, [bx, by], [bx + boon_px, by + boon_px]).build();
-                } else {
-                    draw.add_rect([bx, by], [bx + boon_px, by + boon_px], [1.0, 1.0, 1.0, 0.15])
-                        .filled(true).rounding(2.0).build();
+                    draw.add_image(handle.tex, [sx, sy], [sx + skill_px, sy + skill_px])
+                        .col([1.0, 1.0, 1.0, opacity])
+                        .build();
                 }
-                if stacks > 1 {
-                    draw.add_text(
-                        [bx + boon_px - 8.0, by + boon_px - 10.0],
-                        [0.97, 0.97, 1.0, 1.0],
-                        format!("{stacks}"),
-                    );
-                }
-                bx += boon_px + 2.0;
-                if bx + boon_px > max_x { break; }
+                sx += skill_px + 2.0;
+                if sx + skill_px > panel_origin[0] + panel_size[0] - pad { break; }
             }
         }
 
-        // Recent skill casts strip.
-        if want_skills {
-            let skills = recent_skill_casts(&p.rotation, time_ms, 4);
-            if !skills.is_empty() {
-                let mut sx = skill_x;
-                let sy = row_mid - skill_px * 0.5;
-                let max_x = skill_x + skill_strip_w;
-                let latest_hold_ms: i64 = 1200;
-                let latest_fade_ms: i64 = 2500;
-                let fade_ms: i64 = 1500;
-                let t = time_ms as i64;
-                for (idx_s, (id, cast_t)) in skills.iter().enumerate() {
-                    let age = t - cast_t;
-                    let opacity: f32 = if idx_s == 0 {
-                        if age <= latest_hold_ms { 1.0 }
-                        else if age <= latest_hold_ms + latest_fade_ms {
-                            1.0 - (age - latest_hold_ms) as f32 / latest_fade_ms as f32
-                        } else { 0.0 }
-                    } else {
-                        if age >= fade_ms { 0.0 } else { 1.0 - age as f32 / fade_ms as f32 }
-                    };
-                    if opacity <= 0.0 { continue; }
-                    let icon = crate::ui::icons::lookup(
-                        json,
-                        crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Skill, id: *id },
-                    );
-                    if let Some(handle) = icon {
-                        draw.add_image(handle.tex, [sx, sy], [sx + skill_px, sy + skill_px])
-                            .col([1.0, 1.0, 1.0, opacity])
-                            .build();
-                    }
-                    sx += skill_px + 2.0;
-                    if sx + skill_px > max_x { break; }
-                }
-            }
-        }
+        y += row_h + 4.0;
+        if y > panel_origin[1] + panel_size[1] - row_h { break; }
     }
 }
+
 
 #[cfg(windows)]
 fn find_commander_position(json: &EiJson, time_ms: u64) -> Option<(f64, f64)> {
@@ -614,34 +569,14 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             let panel_open = PLAYBACK.lock().ok().map(|g| g.show_party_panel).unwrap_or(false);
             let inner = ui.content_region_avail();
 
-            // Party strip sits ABOVE the map as a vertical list of compact
-            // single-line rows. Height scales with party size; capped at
-            // half the child-window height so the map keeps usable space.
-            let local_group = json.players.get(idx).map(|s| s.group).unwrap_or(-1);
-            let party_count = json.players.iter()
-                .filter(|p| p.group == local_group && !p.not_in_squad)
-                .count();
-            const ROW_H_PANEL: f32 = 26.0;
-            let panel_h: f32 = if panel_open && party_count > 0 {
-                let want = (party_count as f32) * ROW_H_PANEL + 8.0;
-                want.min(inner[1] * 0.5).max(ROW_H_PANEL + 8.0)
-            } else { 0.0 };
-
-            let map_avail_w = inner[0];
-            let map_avail_h = (inner[1] - panel_h).max(10.0);
-            let scale = (map_avail_w / mw).min(map_avail_h / mh).max(0.01);
+            // Map gets the full child-window area. The party panel, when
+            // open, overlays the left 260 px on top of the map.
+            let scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
             let render_w = mw * scale;
             let render_h = mh * scale;
             let origin = ui.cursor_screen_pos();
-            let ox = origin[0] + (map_avail_w - render_w) * 0.5;
-            let oy = origin[1] + panel_h + (map_avail_h - render_h) * 0.5;
-
-            // Panel first — render_party_panel acquires its own DrawListMut,
-            // and imgui-rs forbids two live instances per window. So we run
-            // the panel BEFORE grabbing the outer draw list.
-            if panel_open {
-                render_party_panel(ui, json, idx, time_ms, [origin[0], origin[1]], [inner[0], panel_h]);
-            }
+            let ox = origin[0] + (inner[0] - render_w) * 0.5;
+            let oy = origin[1] + (inner[1] - render_h) * 0.5;
 
             let draw = ui.get_window_draw_list();
 
@@ -760,6 +695,23 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                         }
                     }
                 }
+            }
+
+            // Drop the outer draw_list so render_party_panel can acquire
+            // its own (imgui-rs forbids two live DrawListMut at once).
+            drop(draw);
+
+            // Party panel overlays the left 260 px of the map area.
+            if panel_open {
+                let panel_w: f32 = 260.0_f32.min(inner[0]);
+                render_party_panel(
+                    ui,
+                    json,
+                    idx,
+                    time_ms,
+                    [origin[0], origin[1]],
+                    [panel_w, inner[1]],
+                );
             }
 
             // Pin the controls row to the bottom of the child window.
