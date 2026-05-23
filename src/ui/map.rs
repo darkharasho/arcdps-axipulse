@@ -22,8 +22,6 @@ use crate::map::wvw::{landmarks, resolve_map_from_zone, LandmarkType};
 #[cfg(windows)]
 use crate::ui::tile_cache::{self, TileKey};
 
-#[cfg(windows)]
-const MVP_TILE_ZOOM: u32 = 5;
 
 /// Playback state for the Map tab. One instance lives for the plugin
 /// lifetime; it resets to t=0 / paused whenever the rendered fight
@@ -595,6 +593,10 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
     let _ = sync_fight_key(log_path);
     let duration_ms = json.duration_ms;
     let time_ms = tick_playback(ui, duration_ms);
+    let (user_scale, pan_x, pan_y) = {
+        let g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+        (g.user_scale, g.pan_x, g.pan_y)
+    };
 
     // Resolve which WvW map this fight took place on. EI populates
     // `zone`/`map_name` for some encounters but leaves them empty for
@@ -623,12 +625,13 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
 
             // Map gets the full child-window area. The party panel, when
             // open, overlays the left 260 px on top of the map.
-            let scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
+            let fit_scale = (inner[0] / mw).min(inner[1] / mh).max(0.01);
+            let scale = fit_scale * user_scale;
             let render_w = mw * scale;
             let render_h = mh * scale;
             let origin = ui.cursor_screen_pos();
-            let ox = origin[0] + (inner[0] - render_w) * 0.5;
-            let oy = origin[1] + (inner[1] - render_h) * 0.5;
+            let ox = origin[0] + (inner[0] - render_w) * 0.5 + pan_x;
+            let oy = origin[1] + (inner[1] - render_h) * 0.5 + pan_y;
 
             let draw = ui.get_window_draw_list();
 
@@ -638,7 +641,8 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 .build();
 
             // Tile background.
-            let tiles = get_map_tiles(map, MVP_TILE_ZOOM);
+            let tile_zoom = tile_zoom_for_scale(user_scale);
+            let tiles = get_map_tiles(map, tile_zoom);
             for tile in &tiles {
                 if let Some(h) = tile_cache::lookup(TileKey { zoom: tile.zoom, tx: tile.tx, ty: tile.ty }) {
                     let x0 = ox + tile.x * scale;
