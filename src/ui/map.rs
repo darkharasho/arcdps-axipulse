@@ -668,11 +668,13 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             let ox = origin[0] + (inner[0] - render_w) * 0.5 + pan_x;
             let oy = origin[1] + (inner[1] - render_h) * 0.5 + pan_y;
 
-            // Mouse hit area for camera input (wheel + drag). Sits
-            // underneath the party panel and bottom controls — those
-            // render afterwards and take precedence.
+            // Mouse hit area for camera input (wheel + drag). Sized to
+            // exclude the controls row at the bottom so its buttons keep
+            // receiving clicks instead of being eaten by this hit-button.
+            let controls_reserved_h = ui.frame_height_with_spacing() + 4.0;
+            let cam_h = (inner[1] - controls_reserved_h).max(20.0);
             let hit_pos = ui.cursor_screen_pos();
-            ui.invisible_button("##map-camera-hit", [inner[0], inner[1]]);
+            ui.invisible_button("##map-camera-hit", [inner[0], cam_h]);
             ui.set_cursor_screen_pos(hit_pos);
             let hit_hovered = ui.is_item_hovered();
             let hit_active = ui.is_item_active();
@@ -727,17 +729,23 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 }
             }
 
+            // Marker / landmark / trail sizes grow sub-linearly with the
+            // user's zoom so they stay readable against the now-larger
+            // map but don't dominate the screen at extreme zoom.
+            let marker_scale = user_scale.sqrt().max(1.0);
+
             // Landmark pins.
             for lm in landmarks(map) {
                 let cx = ox + lm.x * scale;
                 let cy = oy + lm.y * scale;
-                let (r, color): (f32, [f32; 4]) = match lm.kind {
+                let (r_base, color): (f32, [f32; 4]) = match lm.kind {
                     LandmarkType::Keep  => (6.0, [0.93, 0.27, 0.27, 0.85]),
                     LandmarkType::Tower => (5.0, [0.96, 0.62, 0.04, 0.85]),
                     LandmarkType::Camp  => (4.0, [0.13, 0.77, 0.37, 0.85]),
                     LandmarkType::Ruins => (4.0, [0.55, 0.36, 0.96, 0.85]),
                     LandmarkType::Named => (3.5, [0.42, 0.45, 0.50, 0.85]),
                 };
+                let r = r_base * marker_scale;
                 draw.add_circle([cx, cy], r, color).filled(true).build();
                 draw.add_text([cx + r + 2.0, cy - 6.0], TEXT_MUTED, lm.name);
             }
@@ -765,7 +773,7 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 if recent_end > recent_start + 1 {
                     let recent_slice = &dot.positions[recent_start..recent_end];
                     let color = if dot.is_self { TRAIL_COLOR_RECENT_SELF } else { TRAIL_COLOR_RECENT_PEER };
-                    let thick = if dot.is_self { 2.0 } else { 1.5 };
+                    let thick = (if dot.is_self { 2.0 } else { 1.5 }) * marker_scale;
                     let mut prev: Option<[f32; 2]> = None;
                     for sample in recent_slice {
                         if sample.len() < 2 { continue; }
@@ -782,21 +790,21 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             for dot in &dots {
                 let cx = ox + dot.x * scale;
                 let cy = oy + dot.y * scale;
-                let sz_alive = if dot.is_self { 18.0 } else { 14.0 };
+                let sz_alive = (if dot.is_self { 18.0 } else { 14.0 }) * marker_scale;
 
                 match dot.status {
                     MemberStatus::Dead => {
-                        let r: f32 = 7.0;
+                        let r: f32 = 7.0 * marker_scale;
                         draw.add_circle([cx, cy], r, [0.93, 0.27, 0.27, 0.95]).filled(true).build();
-                        draw.add_circle([cx, cy], r, [0.55, 0.10, 0.10, 1.0]).thickness(1.5).build();
+                        draw.add_circle([cx, cy], r, [0.55, 0.10, 0.10, 1.0]).thickness(1.5 * marker_scale).build();
                         let h = r * 0.55;
-                        draw.add_line([cx - h, cy - h], [cx + h, cy + h], [1.0, 1.0, 1.0, 0.95]).thickness(1.8).build();
-                        draw.add_line([cx + h, cy - h], [cx - h, cy + h], [1.0, 1.0, 1.0, 0.95]).thickness(1.8).build();
+                        draw.add_line([cx - h, cy - h], [cx + h, cy + h], [1.0, 1.0, 1.0, 0.95]).thickness(1.8 * marker_scale).build();
+                        draw.add_line([cx + h, cy - h], [cx - h, cy + h], [1.0, 1.0, 1.0, 0.95]).thickness(1.8 * marker_scale).build();
                     }
                     MemberStatus::Down => {
-                        let r: f32 = 6.5;
+                        let r: f32 = 6.5 * marker_scale;
                         draw.add_circle([cx, cy], r, [0.23, 0.51, 0.96, 0.85]).filled(true).build();
-                        draw.add_circle([cx, cy], r, [0.10, 0.30, 0.70, 1.0]).thickness(1.5).build();
+                        draw.add_circle([cx, cy], r, [0.10, 0.30, 0.70, 1.0]).thickness(1.5 * marker_scale).build();
                         let h = r * 0.55;
                         draw.add_triangle(
                             [cx - h, cy - h * 0.6],
@@ -809,17 +817,17 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                         if let Some(icon) = crate::ui::icons::lookup_bundled(dot.profession) {
                             let half = sz_alive * 0.5;
                             if dot.is_self {
-                                draw.add_circle([cx, cy], half + 2.5, [0.06, 0.72, 0.51, 0.85])
-                                    .thickness(2.0)
+                                draw.add_circle([cx, cy], half + 2.5 * marker_scale, [0.06, 0.72, 0.51, 0.85])
+                                    .thickness(2.0 * marker_scale)
                                     .build();
                             } else if dot.is_commander {
-                                draw.add_circle([cx, cy], half + 2.5, [0.96, 0.62, 0.04, 0.90])
-                                    .thickness(2.0)
+                                draw.add_circle([cx, cy], half + 2.5 * marker_scale, [0.96, 0.62, 0.04, 0.90])
+                                    .thickness(2.0 * marker_scale)
                                     .build();
                             }
                             draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
                         } else {
-                            let r: f32 = if dot.is_self { 5.5 } else { 4.0 };
+                            let r: f32 = (if dot.is_self { 5.5 } else { 4.0 }) * marker_scale;
                             let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
                             draw.add_circle([cx, cy], r, color).filled(true).build();
                         }
