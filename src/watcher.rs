@@ -20,9 +20,13 @@ where
     let (tx_work, rx_work) = mpsc::channel::<PathBuf>();
 
     // Worker: drains paths, awaits size stability, calls on_log. Serial.
+    // Runs below normal priority so the EI subprocess cold-start (process
+    // creation + .NET 8 apphost init) yields to GW2's render thread and
+    // doesn't cause a frame hitch at parse-start.
     thread::Builder::new()
         .name("axipulse-parser".into())
         .spawn(move || {
+            lower_thread_priority();
             for path in rx_work {
                 if !await_stable(&path) {
                     log::warn!("axipulse: log {path:?} never stabilised, skipping");
@@ -102,6 +106,15 @@ fn is_zevtc(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("zevtc"))
         .unwrap_or(false)
+}
+
+fn lower_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
 }
 
 fn await_stable(path: &Path) -> bool {

@@ -14,6 +14,11 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Win32 `BELOW_NORMAL_PRIORITY_CLASS` — keeps the EI subprocess from
+/// competing with GW2's render thread for CPU during the parse burst.
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+
 use crate::ei_bundle::{dotnet_root, ei_cli_exe};
 use crate::ei_model::EiJson;
 use crate::ei_settings::{generate_ei_conf, EiSettings};
@@ -79,7 +84,7 @@ pub fn parse_log(
         cmd.env("DOTNET_ROOT", &dotnet);
     }
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     let mut child = cmd.spawn().map_err(ParseError::SubprocessSpawn)?;
 
     let timeout = Duration::from_secs(600);

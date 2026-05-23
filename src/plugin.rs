@@ -258,13 +258,22 @@ fn resolve_dll_dir() -> Option<std::path::PathBuf> {
     path.parent().map(|p| p.to_path_buf())
 }
 
-/// Last successfully-parsed fight: `(label, when)`. Drives the
-/// "Parsed: …" toast in the notifier window so users can see logs
-/// arrive without keeping the main AxiPulse window open. Wrapped in
-/// `Mutex` (instead of an atomic) because the label is a String.
-static LAST_PARSED: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+/// Snapshot the notifier renders for the "Parsed" toast. `map` is the
+/// stripped fight name (e.g. "Green Alpine Borderlands"); `allies` /
+/// `enemies` are coloured separately in the toast body.
+#[derive(Clone)]
+pub struct ParsedToast {
+    pub map: String,
+    pub allies: u32,
+    pub enemies: u32,
+}
 
-pub fn last_parsed() -> Option<(String, std::time::Instant)> {
+/// Last successfully-parsed fight + when it landed. Drives the "Parsed: …"
+/// toast in the notifier window so users can see logs arrive without
+/// keeping the main AxiPulse window open.
+static LAST_PARSED: Mutex<Option<(ParsedToast, std::time::Instant)>> = Mutex::new(None);
+
+pub fn last_parsed() -> Option<(ParsedToast, std::time::Instant)> {
     LAST_PARSED.lock().ok().and_then(|g| g.clone())
 }
 
@@ -319,14 +328,20 @@ fn on_new_log(path: PathBuf) {
                 record.data.duration_ms,
                 record.data.players.len(),
             );
-            let toast_label = format!(
-                "{} \u{00b7} {} players",
-                if record.data.fight_name.is_empty() { "Fight" } else { record.data.fight_name.as_str() },
-                record.data.players.len(),
-            );
+            // EI's WvW fight_name comes through as "Detailed WvW - <Map>";
+            // strip the prefix so the toast reads just "<Map>".
+            let map = record.data.fight_name
+                .strip_prefix("Detailed WvW - ")
+                .unwrap_or(record.data.fight_name.as_str())
+                .to_string();
+            let allies = record.data.players.len() as u32;
+            let enemies = record.data.targets.iter()
+                .filter(|t| t.enemy_player)
+                .count() as u32;
+            let toast = ParsedToast { map, allies, enemies };
             if let Ok(mut s) = G.state.lock() { s.push_fight(record); }
             if let Ok(mut g) = LAST_PARSED.lock() {
-                *g = Some((toast_label, std::time::Instant::now()));
+                *g = Some((toast, std::time::Instant::now()));
             }
             // Arm 120 frames (~2s @ 60fps) of trace output so we can
             // pinpoint where the host crashes when a new fight first
