@@ -6,9 +6,26 @@ overlays in-game.
 
 ## Features
 
-### WvW Combat Replay (Map tab)
+### Pulse tab — fight summary
 
-Renders a top-down view of the fight on the matching WvW map:
+Overview, Damage, Support, Defense, and Boons sub-tabs roll the latest
+fight up into squad-relative stats: DPS and squad rank, down
+contribution, strips, cleanses, damage taken, distance to tag, plus a
+breakdown of squad / allied / enemy composition by profession.
+
+![Pulse tab](docs/images/pulse-overview.png)
+
+### Timeline tab — per-fight tracks
+
+Time-aligned tracks for health, damage dealt / taken, distance to tag,
+and offensive / defensive boons. The inspector at the bottom drills into
+the highlighted player's survival, boon uptime, and average position.
+
+![Timeline tab](docs/images/timeline.png)
+
+### Map tab — WvW combat replay
+
+Top-down replay on the matching WvW map:
 - Tile background sourced from official GW2 tiles (pre-cached on disk)
 - Landmark pins (keeps, towers, camps, ruins)
 - Each squad member's position with profession icon
@@ -16,11 +33,15 @@ Renders a top-down view of the fight on the matching WvW map:
 - Per-player state overlays: skull (dead) / down-pin markers on the map; sliding party panel with HP bars, distance-to-commander, boon stacks, and recent skill casts
 - Camera: mouse-wheel zoom (cursor-anchored), left-click drag to pan, Reset button, Follow toggle to keep your dot centred, auto-zoom + centre on the squad when a fight opens
 
+![Map tab](docs/images/map.png)
+
 ### Notifier toast
 
-A small "Parsed" toast appears on each new log with the WvW map name and
+A small toast appears on each new log with the WvW map name and
 coloured ally/enemy counts, so you can confirm logs are landing without
 keeping the main AxiPulse window open.
+
+![Notifier toast](docs/images/notifier-toast.png)
 
 ### Parser
 

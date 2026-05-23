@@ -67,7 +67,7 @@ pub fn render(ui: &Ui, config: &mut Config) {
                 segs.push((format!("{} \u{00b7} ", toast.map), neutral));
             }
             segs.push((format!("{}", toast.allies), ALLY_GREEN));
-            segs.push(("v".to_string(), neutral));
+            segs.push((" v ".to_string(), neutral));
             segs.push((format!("{}", toast.enemies), ENEMY_RED));
             (alpha, [0.50, 0.78, 1.0, 1.0], "Parsed", segs)
         }

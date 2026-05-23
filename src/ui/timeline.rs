@@ -268,33 +268,45 @@ fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[f32], max: 
     draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD_BORDER).rounding(4.0).build();
 
     if samples.len() >= 1 && max > 0.0 {
-        // Render each sample as a single filled rectangle from the
-        // baseline up to the sample height. Adjacent rects share a
-        // vertical edge so there are no diagonal seams, eliminating
-        // the zigzag artifacts the two-triangle trapezoid fill caused
-        // under ImGui's anti-aliasing.
+        // Rasterise the area in 1-px-wide vertical columns, linearly
+        // interpolating between samples. Avoids the blocky look of
+        // one-rect-per-sample and the diagonal AA seams that the
+        // two-triangle trapezoid fill produces under ImGui's AA.
         let n = samples.len();
         let mut fill = accent; fill[3] = 0.50;
         let baseline = y + h - 2.0;
-        let step = data_w / n as f32;
-        for i in 0..n {
-            let x0 = data_x + step * i as f32;
-            let x1 = data_x + step * (i + 1) as f32;
-            let v = (samples[i] / max).clamp(0.0, 1.0);
-            let top = y + h - v * (h - 4.0) - 2.0;
-            if baseline - top < 0.5 || x1 - x0 < 0.5 { continue; }
-            draw.add_rect([x0, top], [x1, baseline], fill).filled(true).build();
+        let usable_h = h - 4.0;
+        let sample_at = |x_frac: f32| -> f32 {
+            if n == 1 { return (samples[0] / max).clamp(0.0, 1.0); }
+            let f = x_frac * (n - 1) as f32;
+            let i0 = (f as usize).min(n - 1);
+            let i1 = (i0 + 1).min(n - 1);
+            let t = f - i0 as f32;
+            let v0 = (samples[i0] / max).clamp(0.0, 1.0);
+            let v1 = (samples[i1] / max).clamp(0.0, 1.0);
+            v0 + (v1 - v0) * t
+        };
+        let cols = data_w.floor() as i32;
+        for c in 0..cols {
+            let x0 = data_x + c as f32;
+            let x1 = x0 + 1.0;
+            let v = sample_at((c as f32 + 0.5) / cols as f32);
+            let top = y + h - v * usable_h - 2.0;
+            if baseline - top < 0.5 { continue; }
+            // Overlap by 0.5px to prevent hairline gaps between columns
+            // under ImGui's edge AA.
+            draw.add_rect([x0, top], [x1 + 0.5, baseline], fill).filled(true).build();
         }
-        // Outline along the top of the column stack — draws as line
-        // segments between adjacent sample tops (no extra fill, no AA seams).
+        // Outline traces the actual samples so the curve reads as a line.
         if n >= 2 {
+            let step = data_w / (n - 1) as f32;
             for i in 1..n {
-                let xa = data_x + step * (i - 1) as f32 + step * 0.5;
-                let xb = data_x + step * i as f32 + step * 0.5;
+                let xa = data_x + step * (i - 1) as f32;
+                let xb = data_x + step * i as f32;
                 let va = (samples[i - 1] / max).clamp(0.0, 1.0);
                 let vb = (samples[i]     / max).clamp(0.0, 1.0);
-                let ya = y + h - va * (h - 4.0) - 2.0;
-                let yb = y + h - vb * (h - 4.0) - 2.0;
+                let ya = y + h - va * usable_h - 2.0;
+                let yb = y + h - vb * usable_h - 2.0;
                 draw.add_line([xa, ya], [xb, yb], accent).thickness(1.1).build();
             }
         }
