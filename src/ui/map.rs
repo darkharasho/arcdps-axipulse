@@ -299,33 +299,37 @@ fn render_party_panel(
         .and_then(|m| m.polling_rate)
         .unwrap_or(150);
 
-    // Collect party members so we can size cards based on count.
     let members: Vec<(usize, &crate::ei_model::EiPlayer)> = json.players.iter().enumerate()
         .filter(|(_, p)| p.group == local_group && !p.not_in_squad)
         .collect();
     if members.is_empty() { return; }
 
-    let pad = 6.0_f32;
-    let gap = 6.0_f32;
-    let max_card_w = 180.0_f32;
-    let min_card_w = 110.0_f32;
-    // Try to fit all cards; if that would shrink them under min_card_w, clip
-    // to fit and let the rest overflow (subsequent cards skipped).
-    let avail_w = panel_size[0] - pad * 2.0;
-    let card_w = ((avail_w - gap * (members.len() as f32 - 1.0)) / members.len() as f32)
-        .clamp(min_card_w, max_card_w);
-    let card_h = panel_size[1] - pad * 2.0;
+    let pad = 4.0_f32;
+    let row_h = 26.0_f32;
+    // Inline section widths (left-to-right): icon | name | dist | hp_bar | hp_lbl | boons | skills.
+    // Compute fixed slot widths; the HP bar takes whatever's left.
+    let icon_w = 20.0_f32;
+    let name_w = 96.0_f32;
+    let dist_w = 36.0_f32;
+    let hp_lbl_w = 36.0_f32;
+    let boon_px = 14.0_f32;
+    let skill_px = 14.0_f32;
+    let boon_strip_w = boon_px * 6.0 + 5.0 * 2.0; // up to 6 boons
+    let skill_strip_w = skill_px * 4.0 + 3.0 * 2.0; // up to 4 skills
+    let inter = 6.0_f32; // gap between sections
+    let panel_inner_w = panel_size[0] - pad * 2.0;
 
     for (slot, (i, p)) in members.iter().enumerate() {
-        let cx0 = panel_origin[0] + pad + (slot as f32) * (card_w + gap);
-        let cy0 = panel_origin[1] + pad;
-        let cx1 = cx0 + card_w;
-        let cy1 = cy0 + card_h;
-        if cx1 > panel_origin[0] + panel_size[0] - pad { break; }
+        let ry0 = panel_origin[1] + pad + (slot as f32) * row_h;
+        let ry1 = ry0 + row_h - 2.0;
+        if ry1 > panel_origin[1] + panel_size[1] - pad { break; }
 
-        // Card background.
-        draw.add_rect([cx0, cy0], [cx1, cy1], [1.0, 1.0, 1.0, 0.04])
-            .filled(true).rounding(4.0).build();
+        // Row background.
+        draw.add_rect(
+            [panel_origin[0] + pad, ry0],
+            [panel_origin[0] + pad + panel_inner_w, ry1],
+            [1.0, 1.0, 1.0, 0.03],
+        ).filled(true).rounding(3.0).build();
 
         let rd_pos = p.combat_replay_data.as_ref()
             .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
@@ -334,24 +338,27 @@ fn render_party_panel(
             .unwrap_or(MemberStatus::Alive);
         let hp = health_at(&p.health_percents, time_ms);
 
-        // Profession icon top-left.
-        let icon_size = 20.0_f32;
-        let icon_x = cx0 + 6.0;
-        let icon_y = cy0 + 6.0;
+        // Vertical center of the row for text/icons.
+        let row_mid = ry0 + (row_h - 2.0) * 0.5;
+
+        // Profession icon.
+        let icon_x = panel_origin[0] + pad + 4.0;
+        let icon_y = row_mid - icon_w * 0.5;
         if let Some(icon) = crate::ui::icons::lookup_bundled(p.profession.as_str()) {
-            draw.add_image(icon.tex, [icon_x, icon_y], [icon_x + icon_size, icon_y + icon_size]).build();
+            draw.add_image(icon.tex, [icon_x, icon_y], [icon_x + icon_w, icon_y + icon_w]).build();
         }
 
-        // Name next to icon, truncated if too long.
-        let name_x = icon_x + icon_size + 6.0;
+        // Name (truncated to ~12 chars).
+        let name_x = icon_x + icon_w + inter;
         let name_color = if *i == self_idx { [0.06, 0.72, 0.51, 1.0] }
             else if p.has_commander_tag { [0.96, 0.62, 0.04, 1.0] }
             else { [0.97, 0.97, 1.00, 1.0] };
-        let name_max_chars = ((card_w - icon_size - 50.0) / 7.5).max(4.0) as usize;
-        let short_name: String = p.name.chars().take(name_max_chars).collect();
-        draw.add_text([name_x, icon_y + 2.0], name_color, &short_name);
+        let max_chars = (name_w / 7.5).max(4.0) as usize;
+        let short_name: String = p.name.chars().take(max_chars).collect();
+        draw.add_text([name_x, row_mid - 7.0], name_color, &short_name);
 
-        // Distance badge top-right (when we have positions and a commander).
+        // Distance (or CMD badge).
+        let dist_x = name_x + name_w;
         if let (Some(cp), Some((px, py))) = (commander_pos, rd_pos) {
             if !p.has_commander_tag {
                 let dx = (px - cp.0) as f32;
@@ -361,22 +368,43 @@ fn render_party_panel(
                 let dist_color = if inches > 600 { [0.93, 0.27, 0.27, 1.0] }
                     else if inches > 300 { [0.96, 0.62, 0.04, 1.0] }
                     else { [0.13, 0.77, 0.37, 1.0] };
-                let dist_text = format!("{}", inches);
-                draw.add_text(
-                    [cx1 - 32.0, icon_y + 2.0],
-                    dist_color,
-                    &dist_text,
-                );
+                draw.add_text([dist_x, row_mid - 7.0], dist_color, format!("{}", inches));
             } else {
-                draw.add_text([cx1 - 32.0, icon_y + 2.0], [0.96, 0.62, 0.04, 1.0], "CMD");
+                draw.add_text([dist_x, row_mid - 7.0], [0.96, 0.62, 0.04, 1.0], "CMD");
             }
         }
 
-        // HP bar.
-        let bar_x0 = icon_x;
-        let bar_w = card_w - 12.0;
-        let bar_y0 = cy0 + 30.0;
+        // Sections that get hidden as the row gets narrower:
+        // - skills strip drops first
+        // - then boons strip
+        // - then HP label
+        // - HP bar always present
+        let mut right_edge = panel_origin[0] + pad + panel_inner_w - 4.0;
+        let want_skills = right_edge - skill_strip_w >= dist_x + dist_w + inter + 80.0;
+        let skill_x = if want_skills {
+            let x = right_edge - skill_strip_w;
+            right_edge = x - inter;
+            x
+        } else { 0.0 };
+        let want_boons = right_edge - boon_strip_w >= dist_x + dist_w + inter + 70.0;
+        let boon_x = if want_boons {
+            let x = right_edge - boon_strip_w;
+            right_edge = x - inter;
+            x
+        } else { 0.0 };
+        let want_hp_lbl = right_edge - hp_lbl_w >= dist_x + dist_w + inter + 60.0;
+        let hp_lbl_x = if want_hp_lbl {
+            let x = right_edge - hp_lbl_w;
+            right_edge = x - 2.0;
+            x
+        } else { 0.0 };
+
+        // HP bar fills the remaining horizontal space.
+        let bar_x0 = dist_x + dist_w + inter;
+        let bar_x1 = right_edge.max(bar_x0 + 20.0);
+        let bar_w = (bar_x1 - bar_x0).max(20.0);
         let bar_h = 8.0;
+        let bar_y0 = row_mid - bar_h * 0.5;
         draw.add_rect([bar_x0, bar_y0], [bar_x0 + bar_w, bar_y0 + bar_h], [1.0, 1.0, 1.0, 0.08])
             .filled(true).rounding(2.0).build();
         let (fill_color, fill_frac, label): ([f32; 4], f32, String) = match status {
@@ -394,74 +422,77 @@ fn render_party_panel(
             draw.add_rect([bar_x0, bar_y0], [bar_x0 + fill_w, bar_y0 + bar_h], fill_color)
                 .filled(true).rounding(2.0).build();
         }
-        // HP label sits to the right of the bar so it doesn't eat vertical room.
-        let lbl_w = (label.len() as f32) * 7.0;
-        draw.add_text([bar_x0 + bar_w - lbl_w, bar_y0 - 2.0], [0.78, 0.78, 0.85, 1.0], &label);
+        if want_hp_lbl {
+            draw.add_text([hp_lbl_x, row_mid - 7.0], [0.78, 0.78, 0.85, 1.0], &label);
+        }
 
         // Boon strip.
-        let boon_px = 16.0_f32;
-        let boon_gap = 2.0_f32;
-        let mut bx = bar_x0;
-        let by = bar_y0 + bar_h + 6.0;
-        for boon_id in crate::map::boon_panel::PANEL_BOON_ORDER {
-            let stacks = p.buff_uptimes.iter()
-                .find(|b| b.id == *boon_id)
-                .map(|b| boon_stacks_at(&b.states, time_ms))
-                .unwrap_or(0);
-            if stacks == 0 { continue; }
-            let icon = crate::ui::icons::lookup(
-                json,
-                crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Buff, id: *boon_id },
-            );
-            if let Some(handle) = icon {
-                draw.add_image(handle.tex, [bx, by], [bx + boon_px, by + boon_px]).build();
-            } else {
-                draw.add_rect([bx, by], [bx + boon_px, by + boon_px], [1.0, 1.0, 1.0, 0.15])
-                    .filled(true).rounding(3.0).build();
-            }
-            if stacks > 1 {
-                draw.add_text(
-                    [bx + boon_px - 8.0, by + boon_px - 10.0],
-                    [0.97, 0.97, 1.0, 1.0],
-                    format!("{stacks}"),
+        if want_boons {
+            let mut bx = boon_x;
+            let by = row_mid - boon_px * 0.5;
+            let max_x = boon_x + boon_strip_w;
+            for boon_id in crate::map::boon_panel::PANEL_BOON_ORDER {
+                let stacks = p.buff_uptimes.iter()
+                    .find(|b| b.id == *boon_id)
+                    .map(|b| boon_stacks_at(&b.states, time_ms))
+                    .unwrap_or(0);
+                if stacks == 0 { continue; }
+                let icon = crate::ui::icons::lookup(
+                    json,
+                    crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Buff, id: *boon_id },
                 );
+                if let Some(handle) = icon {
+                    draw.add_image(handle.tex, [bx, by], [bx + boon_px, by + boon_px]).build();
+                } else {
+                    draw.add_rect([bx, by], [bx + boon_px, by + boon_px], [1.0, 1.0, 1.0, 0.15])
+                        .filled(true).rounding(2.0).build();
+                }
+                if stacks > 1 {
+                    draw.add_text(
+                        [bx + boon_px - 8.0, by + boon_px - 10.0],
+                        [0.97, 0.97, 1.0, 1.0],
+                        format!("{stacks}"),
+                    );
+                }
+                bx += boon_px + 2.0;
+                if bx + boon_px > max_x { break; }
             }
-            bx += boon_px + boon_gap;
-            if bx + boon_px > cx1 - 6.0 { break; }
         }
 
         // Recent skill casts strip.
-        let skills = recent_skill_casts(&p.rotation, time_ms, 4);
-        if !skills.is_empty() {
-            let skill_px = 16.0_f32;
-            let mut sx = bar_x0;
-            let sy = by + boon_px + 4.0;
-            let latest_hold_ms: i64 = 1200;
-            let latest_fade_ms: i64 = 2500;
-            let fade_ms: i64 = 1500;
-            let t = time_ms as i64;
-            for (idx_s, (id, cast_t)) in skills.iter().enumerate() {
-                let age = t - cast_t;
-                let opacity: f32 = if idx_s == 0 {
-                    if age <= latest_hold_ms { 1.0 }
-                    else if age <= latest_hold_ms + latest_fade_ms {
-                        1.0 - (age - latest_hold_ms) as f32 / latest_fade_ms as f32
-                    } else { 0.0 }
-                } else {
-                    if age >= fade_ms { 0.0 } else { 1.0 - age as f32 / fade_ms as f32 }
-                };
-                if opacity <= 0.0 { continue; }
-                let icon = crate::ui::icons::lookup(
-                    json,
-                    crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Skill, id: *id },
-                );
-                if let Some(handle) = icon {
-                    draw.add_image(handle.tex, [sx, sy], [sx + skill_px, sy + skill_px])
-                        .col([1.0, 1.0, 1.0, opacity])
-                        .build();
+        if want_skills {
+            let skills = recent_skill_casts(&p.rotation, time_ms, 4);
+            if !skills.is_empty() {
+                let mut sx = skill_x;
+                let sy = row_mid - skill_px * 0.5;
+                let max_x = skill_x + skill_strip_w;
+                let latest_hold_ms: i64 = 1200;
+                let latest_fade_ms: i64 = 2500;
+                let fade_ms: i64 = 1500;
+                let t = time_ms as i64;
+                for (idx_s, (id, cast_t)) in skills.iter().enumerate() {
+                    let age = t - cast_t;
+                    let opacity: f32 = if idx_s == 0 {
+                        if age <= latest_hold_ms { 1.0 }
+                        else if age <= latest_hold_ms + latest_fade_ms {
+                            1.0 - (age - latest_hold_ms) as f32 / latest_fade_ms as f32
+                        } else { 0.0 }
+                    } else {
+                        if age >= fade_ms { 0.0 } else { 1.0 - age as f32 / fade_ms as f32 }
+                    };
+                    if opacity <= 0.0 { continue; }
+                    let icon = crate::ui::icons::lookup(
+                        json,
+                        crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Skill, id: *id },
+                    );
+                    if let Some(handle) = icon {
+                        draw.add_image(handle.tex, [sx, sy], [sx + skill_px, sy + skill_px])
+                            .col([1.0, 1.0, 1.0, opacity])
+                            .build();
+                    }
+                    sx += skill_px + 2.0;
+                    if sx + skill_px > max_x { break; }
                 }
-                sx += skill_px + 2.0;
-                if sx + skill_px > cx1 - 6.0 { break; }
             }
         }
     }
@@ -581,10 +612,21 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
         .size([avail[0], avail[1]])
         .build(|| {
             let panel_open = PLAYBACK.lock().ok().map(|g| g.show_party_panel).unwrap_or(false);
-            // Party strip sits ABOVE the map as a horizontal row of cards.
-            let panel_h: f32 = if panel_open { 108.0 } else { 0.0 };
-
             let inner = ui.content_region_avail();
+
+            // Party strip sits ABOVE the map as a vertical list of compact
+            // single-line rows. Height scales with party size; capped at
+            // half the child-window height so the map keeps usable space.
+            let local_group = json.players.get(idx).map(|s| s.group).unwrap_or(-1);
+            let party_count = json.players.iter()
+                .filter(|p| p.group == local_group && !p.not_in_squad)
+                .count();
+            const ROW_H_PANEL: f32 = 26.0;
+            let panel_h: f32 = if panel_open && party_count > 0 {
+                let want = (party_count as f32) * ROW_H_PANEL + 8.0;
+                want.min(inner[1] * 0.5).max(ROW_H_PANEL + 8.0)
+            } else { 0.0 };
+
             let map_avail_w = inner[0];
             let map_avail_h = (inner[1] - panel_h).max(10.0);
             let scale = (map_avail_w / mw).min(map_avail_h / mh).max(0.01);
