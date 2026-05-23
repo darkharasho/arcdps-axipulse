@@ -197,6 +197,37 @@ pub fn recent_skill_casts(
     all
 }
 
+/// Pick a tile zoom level (z4..z7) based on the user's view scale.
+/// Higher view scale → load higher zoom tiles so zoomed-in views stay
+/// crisp without re-fetching tiles. Mirrors upstream's
+/// `tileZoomForScale` in axipulse/src/renderer/views/map/MovementView.tsx.
+pub fn tile_zoom_for_scale(view_scale: f32) -> u32 {
+    if view_scale >= 8.0 { 7 }
+    else if view_scale >= 4.0 { 6 }
+    else if view_scale >= 2.0 { 5 }
+    else { 4 }
+}
+
+/// Cursor-anchored zoom: given the current scale and pan, returns the
+/// new (scale, pan_x, pan_y) such that the world point currently under
+/// the cursor remains under the cursor after the zoom.
+///
+/// `cursor_x`/`cursor_y` are in the same coordinate space as
+/// `pan_x`/`pan_y` (screen pixels relative to the fit-centre of the map).
+pub fn zoom_at_point(
+    cur_scale: f32,
+    cur_pan_x: f32,
+    cur_pan_y: f32,
+    new_scale: f32,
+    cursor_x: f32,
+    cursor_y: f32,
+) -> (f32, f32, f32) {
+    let ratio = new_scale / cur_scale;
+    let new_pan_x = cur_pan_x - (cursor_x - cur_pan_x) * (ratio - 1.0);
+    let new_pan_y = cur_pan_y - (cursor_y - cur_pan_y) * (ratio - 1.0);
+    (new_scale, new_pan_x, new_pan_y)
+}
+
 /// Reset playback to t=0, paused, when the rendered fight changes.
 /// Returns the (possibly updated) (time_ms, playing, speed) tuple.
 #[cfg(windows)]
