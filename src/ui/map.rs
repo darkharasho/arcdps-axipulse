@@ -77,6 +77,13 @@ const BG_DARK:   [f32; 4] = [0.04, 0.05, 0.07, 1.0];
 const TEXT_MUTED:[f32; 4] = [0.55, 0.58, 0.65, 1.0];
 
 #[cfg(windows)]
+const MIN_USER_SCALE: f32 = 1.0;
+#[cfg(windows)]
+const MAX_USER_SCALE: f32 = 16.0;
+#[cfg(windows)]
+const ZOOM_STEP: f32 = 0.15;
+
+#[cfg(windows)]
 const TRAIL_LENGTH_SAMPLES: usize = 15;
 #[cfg(windows)]
 const TRAIL_COLOR_HISTORY: [f32; 4] = [0.86, 0.86, 0.92, 0.18];
@@ -632,6 +639,37 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             let origin = ui.cursor_screen_pos();
             let ox = origin[0] + (inner[0] - render_w) * 0.5 + pan_x;
             let oy = origin[1] + (inner[1] - render_h) * 0.5 + pan_y;
+
+            // Mouse hit area for camera input (wheel + drag). Sits
+            // underneath the party panel and bottom controls — those
+            // render afterwards and take precedence.
+            let hit_pos = ui.cursor_screen_pos();
+            ui.invisible_button("##map-camera-hit", [inner[0], inner[1]]);
+            ui.set_cursor_screen_pos(hit_pos);
+            let hit_hovered = ui.is_item_hovered();
+            let hit_active = ui.is_item_active();
+            let wheel = ui.io().mouse_wheel;
+            let mouse_pos = ui.io().mouse_pos;
+            if hit_hovered && wheel != 0.0 {
+                let cur_centre_x = origin[0] + inner[0] * 0.5;
+                let cur_centre_y = origin[1] + inner[1] * 0.5;
+                let cursor_rel_x = mouse_pos[0] - cur_centre_x;
+                let cursor_rel_y = mouse_pos[1] - cur_centre_y;
+                let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
+                let direction = wheel.signum();
+                let next_scale = (g.user_scale * (1.0 + direction * ZOOM_STEP))
+                    .clamp(MIN_USER_SCALE, MAX_USER_SCALE);
+                if (next_scale - g.user_scale).abs() > f32::EPSILON {
+                    let (s, npx, npy) = zoom_at_point(
+                        g.user_scale, g.pan_x, g.pan_y, next_scale, cursor_rel_x, cursor_rel_y,
+                    );
+                    g.user_scale = s;
+                    g.pan_x = npx;
+                    g.pan_y = npy;
+                    g.follow_player = false;
+                }
+            }
+            let _ = hit_active; // used in P4.T5
 
             let draw = ui.get_window_draw_list();
 
