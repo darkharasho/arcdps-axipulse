@@ -42,6 +42,12 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
          when it finishes — works even with the main window hidden.",
     );
 
+    ui.separator();
+    ui.text_disabled("Updates");
+    if ui.checkbox("Check for updates on startup", &mut config.auto_update_check) {
+        config.save();
+    }
+
     if dirty { config.save(); }
 }
 
