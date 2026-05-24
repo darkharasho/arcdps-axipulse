@@ -161,7 +161,6 @@ fn render_update_pill(ui: &arcdps::imgui::Ui) {
             (format!("Update failed: {msg}"), [1.00, 0.40, 0.40, 1.0]),
         _ => return,
     };
-    ui.same_line();
     ui.text_colored(color, &label);
     if let UpdateState::Available { .. } = &st {
         ui.same_line();
@@ -175,11 +174,6 @@ fn render_update_pill(ui: &arcdps::imgui::Ui) {
     if let UpdateState::Failed { .. } = &st {
         ui.same_line();
         if ui.small_button("\u{00d7}##dismiss-update") { dismiss_error(); }
-    }
-    if let UpdateState::Available { body, .. } = &st {
-        if !body.is_empty() && ui.collapsing_header("What's new", arcdps::imgui::TreeNodeFlags::empty()) {
-            ui.text_wrapped(body);
-        }
     }
 }
 
