@@ -79,6 +79,12 @@ fn set_state(new: UpdateState) {
     if let Ok(mut g) = STATE.lock() { *g = new; }
 }
 
+/// UI helper for synchronous failure reporting (e.g. resolver
+/// returned None before any thread was spawned).
+pub fn set_failed(msg: &str) {
+    set_state(UpdateState::Failed { msg: msg.to_string() });
+}
+
 use std::thread;
 use std::time::Duration;
 
@@ -128,13 +134,21 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Called from the UI when the user clicks Install. No-op unless
-/// `STATE` is currently `Available`.
+/// `STATE` is currently `Available`. The check-and-transition is
+/// atomic under `STATE`'s lock so a double-click can't spawn two
+/// download threads.
 pub fn start_install(dll_dir: PathBuf) {
-    let (tag, asset_url) = match snapshot() {
-        UpdateState::Available { tag, asset_url, .. } => (tag, asset_url),
-        _ => return,
+    let (tag, asset_url) = {
+        let Ok(mut g) = STATE.lock() else { return; };
+        match &*g {
+            UpdateState::Available { tag, asset_url, .. } => {
+                let captured = (tag.clone(), asset_url.clone());
+                *g = UpdateState::Downloading { tag: captured.0.clone(), pct: 0.0 };
+                captured
+            }
+            _ => return,
+        }
     };
-    set_state(UpdateState::Downloading { tag: tag.clone(), pct: 0.0 });
     thread::Builder::new()
         .name("axipulse-update-download".into())
         .spawn(move || {

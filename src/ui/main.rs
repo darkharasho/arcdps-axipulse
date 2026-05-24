@@ -166,8 +166,9 @@ fn render_update_pill(ui: &arcdps::imgui::Ui) {
     if let UpdateState::Available { .. } = &st {
         ui.same_line();
         if ui.small_button("Install") {
-            if let Some(dir) = crate::plugin::dll_dir() {
-                start_install(dir);
+            match crate::plugin::dll_dir() {
+                Some(dir) => start_install(dir),
+                None => crate::updater::set_failed("could not locate DLL directory"),
             }
         }
     }
