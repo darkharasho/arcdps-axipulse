@@ -79,6 +79,51 @@ fn set_state(new: UpdateState) {
     if let Ok(mut g) = STATE.lock() { *g = new; }
 }
 
+use std::thread;
+use std::time::Duration;
+
+const RELEASES_URL: &str =
+    "https://api.github.com/repos/darkharasho/arcdps-axipulse/releases/latest";
+
+/// Called once on plugin init. If `enabled`, spawns a short-lived
+/// background thread that hits the GitHub `latest release` endpoint
+/// and updates `STATE` accordingly. Cheap to call when disabled.
+pub fn kick_check_on_load(enabled: bool) {
+    if !enabled {
+        set_state(UpdateState::Idle);
+        return;
+    }
+    set_state(UpdateState::Checking);
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    thread::Builder::new()
+        .name("axipulse-update-check".into())
+        .spawn(move || {
+            match http_fetch_latest() {
+                Ok(body) => match parse_latest(&body, &current) {
+                    ParseOutcome::Newer { tag, body, asset_url } =>
+                        set_state(UpdateState::Available { tag, body, asset_url }),
+                    ParseOutcome::Current =>
+                        set_state(UpdateState::UpToDate),
+                    ParseOutcome::ParseError(msg) =>
+                        set_state(UpdateState::Failed { msg: format!("parse: {msg}") }),
+                },
+                Err(msg) => set_state(UpdateState::Failed { msg }),
+            }
+        })
+        .ok();
+}
+
+fn http_fetch_latest() -> Result<String, String> {
+    let ua = format!("arcdps_axipulse/{}", env!("CARGO_PKG_VERSION"));
+    let resp = ureq::get(RELEASES_URL)
+        .set("User-Agent", &ua)
+        .set("Accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(15))
+        .call()
+        .map_err(|e| format!("http: {e}"))?;
+    resp.into_string().map_err(|e| format!("read body: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
