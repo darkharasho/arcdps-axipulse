@@ -50,6 +50,35 @@ pub fn parse_latest(json: &str, current: &str) -> ParseOutcome {
     }
 }
 
+use std::sync::Mutex;
+
+#[derive(Debug, Clone)]
+pub enum UpdateState {
+    Idle,
+    Checking,
+    UpToDate,
+    Available    { tag: String, body: String, asset_url: String },
+    Downloading  { tag: String, pct: f32 },
+    Installed    { tag: String },
+    Failed       { msg: String },
+}
+
+static STATE: Mutex<UpdateState> = Mutex::new(UpdateState::Idle);
+
+pub fn snapshot() -> UpdateState {
+    STATE.lock().map(|g| g.clone()).unwrap_or(UpdateState::Idle)
+}
+
+pub fn dismiss_error() {
+    if let Ok(mut g) = STATE.lock() {
+        if matches!(*g, UpdateState::Failed { .. }) { *g = UpdateState::Idle; }
+    }
+}
+
+fn set_state(new: UpdateState) {
+    if let Ok(mut g) = STATE.lock() { *g = new; }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
