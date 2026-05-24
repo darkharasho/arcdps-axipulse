@@ -124,6 +124,83 @@ fn http_fetch_latest() -> Result<String, String> {
     resp.into_string().map_err(|e| format!("read body: {e}"))
 }
 
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+
+/// Called from the UI when the user clicks Install. No-op unless
+/// `STATE` is currently `Available`.
+pub fn start_install(dll_dir: PathBuf) {
+    let (tag, asset_url) = match snapshot() {
+        UpdateState::Available { tag, asset_url, .. } => (tag, asset_url),
+        _ => return,
+    };
+    set_state(UpdateState::Downloading { tag: tag.clone(), pct: 0.0 });
+    thread::Builder::new()
+        .name("axipulse-update-download".into())
+        .spawn(move || {
+            match download_and_swap(&dll_dir, &asset_url, &tag) {
+                Ok(()) => set_state(UpdateState::Installed { tag }),
+                Err(msg) => set_state(UpdateState::Failed { msg }),
+            }
+        })
+        .ok();
+}
+
+fn download_and_swap(dll_dir: &Path, asset_url: &str, tag: &str) -> Result<(), String> {
+    let dll      = dll_dir.join("arcdps_axipulse.dll");
+    let dll_new  = dll_dir.join("arcdps_axipulse.dll.new");
+    let dll_old  = dll_dir.join("arcdps_axipulse.dll.old");
+
+    // Stream into `.new`. ureq returns an io::Read.
+    let ua = format!("arcdps_axipulse/{}", env!("CARGO_PKG_VERSION"));
+    let resp = ureq::get(asset_url)
+        .set("User-Agent", &ua)
+        .timeout(Duration::from_secs(120))
+        .call()
+        .map_err(|e| format!("download: {e}"))?;
+    let total: Option<u64> = resp.header("Content-Length")
+        .and_then(|s| s.parse().ok());
+    let mut reader = resp.into_reader();
+    let mut file = std::fs::File::create(&dll_new)
+        .map_err(|e| format!("create .new: {e}"))?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut read_total: u64 = 0;
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("read: {e}"))?;
+        if n == 0 { break; }
+        file.write_all(&buf[..n]).map_err(|e| format!("write: {e}"))?;
+        read_total += n as u64;
+        if let Some(t) = total {
+            let pct = (read_total as f32 / t as f32) * 100.0;
+            set_state(UpdateState::Downloading { tag: tag.to_string(), pct });
+        }
+    }
+    file.sync_all().map_err(|e| format!("fsync: {e}"))?;
+    drop(file);
+
+    // Best-effort cleanup of any leftover `.old` from a prior session;
+    // ignore failure (Windows may still hold a handle).
+    let _ = std::fs::remove_file(&dll_old);
+
+    // Atomic shuffle. Rename of a loaded DLL is permitted on both
+    // Windows and Linux/Wine.
+    std::fs::rename(&dll, &dll_old)
+        .map_err(|e| format!("rename dll → .old: {e}"))?;
+    std::fs::rename(&dll_new, &dll)
+        .map_err(|e| {
+            // Best-effort rollback if the second rename fails.
+            let _ = std::fs::rename(&dll_old, &dll);
+            format!("rename .new → dll: {e}")
+        })?;
+    Ok(())
+}
+
+/// Called from plugin init. Attempts to delete any leftover `.old`
+/// from a previous update. Failure is silent — we'll retry next session.
+pub fn cleanup_stale_old(dll_dir: &Path) {
+    let _ = std::fs::remove_file(dll_dir.join("arcdps_axipulse.dll.old"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
