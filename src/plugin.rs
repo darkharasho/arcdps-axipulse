@@ -61,6 +61,15 @@ pub fn init() -> Result<(), Option<String>> {
         log::warn!("axipulse init: no cbtlogs path resolved; watcher not started");
     }
 
+    // Auto-updater: best-effort cleanup of any leftover `.old` from
+    // the previous session, then kick the check thread if enabled.
+    if let Some(dir) = dll_dir() {
+        crate::updater::cleanup_stale_old(&dir);
+    }
+    let auto_update_check = G.config.lock()
+        .ok().map(|c| c.auto_update_check).unwrap_or(true);
+    crate::updater::kick_check_on_load(auto_update_check);
+
     Ok(())
 }
 
