@@ -53,12 +53,15 @@ pub fn init() -> Result<(), Option<String>> {
     };
     if let Some(dir) = cbtlogs {
         if dir.exists() {
+            log::info!("axipulse init: watching cbtlogs at {dir:?}");
             let _ = crate::watcher::spawn_watcher(dir, on_new_log);
         } else {
-            log::warn!("axipulse init: cbtlogs {dir:?} does not exist; watcher not started");
+            log::warn!("axipulse init: cbtlogs {dir:?} does not exist; \
+                watcher not started — set the path in the AxiPulse options pane");
         }
     } else {
-        log::warn!("axipulse init: no cbtlogs path resolved; watcher not started");
+        log::warn!("axipulse init: could not resolve cbtlogs path; \
+            watcher not started — set the path in the AxiPulse options pane");
     }
 
     // Auto-updater: best-effort cleanup of any leftover `.old` from

@@ -94,9 +94,38 @@ impl Config {
 }
 
 pub fn default_cbtlogs() -> Option<PathBuf> {
-    let userprofile = std::env::var("USERPROFILE").ok()?;
-    let mut p = PathBuf::from(userprofile);
-    p.push("Documents"); p.push("Guild Wars 2");
+    // Primary: Win32 FOLDERID_Documents, which honours OneDrive/Documents
+    // redirection. Fallback: %USERPROFILE%\Documents — used on non-Windows
+    // hosts (tests, host-side compile) and as a safety net if the shell
+    // API call ever fails.
+    let mut p = known_documents_dir()
+        .or_else(|| {
+            let userprofile = std::env::var("USERPROFILE").ok()?;
+            let mut p = PathBuf::from(userprofile);
+            p.push("Documents");
+            Some(p)
+        })?;
+    p.push("Guild Wars 2");
     p.push("addons"); p.push("arcdps"); p.push("arcdps.cbtlogs");
     Some(p)
 }
+
+#[cfg(windows)]
+fn known_documents_dir() -> Option<PathBuf> {
+    use windows::core::PWSTR;
+    use windows::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    unsafe {
+        let pwstr: PWSTR = SHGetKnownFolderPath(&FOLDERID_Documents, KF_FLAG_DEFAULT, None).ok()?;
+        if pwstr.is_null() { return None; }
+        // Read the null-terminated UTF-16 string.
+        let mut len = 0usize;
+        while *pwstr.0.add(len) != 0 { len += 1; }
+        let slice = std::slice::from_raw_parts(pwstr.0, len);
+        let s = String::from_utf16(slice).ok();
+        windows::Win32::System::Com::CoTaskMemFree(Some(pwstr.0 as *const _));
+        s.map(PathBuf::from)
+    }
+}
+
+#[cfg(not(windows))]
+fn known_documents_dir() -> Option<PathBuf> { None }

@@ -43,9 +43,39 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
     );
 
     ui.separator();
+    ui.text_disabled("Combat log folder");
+    let detected = crate::config::default_cbtlogs()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(could not detect)".into());
+    let effective = if config.cbtlogs_path.is_empty() {
+        detected.clone()
+    } else {
+        config.cbtlogs_path.clone()
+    };
+    let exists = std::path::Path::new(&effective).is_dir();
+    let status_color = if exists { [0.40, 0.92, 0.55, 1.0] } else { [1.00, 0.40, 0.40, 1.0] };
+    let status = if exists { "found" } else { "not found" };
+    ui.text_disabled(format!("Auto-detected: {detected}"));
+    ui.text("Override path:");
+    ui.same_line();
+    let _w = ui.push_item_width(420.0);
+    if ui.input_text("##cbtlogs-path", &mut config.cbtlogs_path)
+        .hint("leave blank to use auto-detected path")
+        .build()
+    {
+        dirty = true;
+    }
+    drop(_w);
+    ui.text_colored(status_color, format!("Current: {effective} ({status})"));
+    ui.text_disabled(
+        "AxiPulse needs to read arcdps's combat logs. \
+         Changes take effect on next GW2 launch."
+    );
+
+    ui.separator();
     ui.text_disabled("Updates");
     if ui.checkbox("Check for updates on startup", &mut config.auto_update_check) {
-        config.save();
+        dirty = true;
     }
 
     if dirty { config.save(); }
