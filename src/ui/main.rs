@@ -69,7 +69,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
             FightSel::History(i) => state.history(i).or_else(|| state.current()),
         };
         let Some(record) = record else {
-            ui.text_disabled("Waiting for the first parsed fight\u{2026}");
+            ui.text_disabled("Waiting for the first parsed fight...");
             return;
         };
         let json = &record.data;
@@ -152,9 +152,9 @@ fn render_update_pill(ui: &arcdps::imgui::Ui) {
         UpdateState::Available { tag, .. } =>
             (format!("Update available \u{00b7} {tag}"), [0.40, 0.92, 0.55, 1.0]),
         UpdateState::Downloading { pct, .. } if pct.is_finite() =>
-            (format!("Downloading\u{2026} {:.0}%", pct), [0.50, 0.78, 1.0, 1.0]),
+            (format!("Downloading... {:.0}%", pct), [0.50, 0.78, 1.0, 1.0]),
         UpdateState::Downloading { .. } =>
-            ("Downloading\u{2026}".to_string(), [0.50, 0.78, 1.0, 1.0]),
+            ("Downloading...".to_string(), [0.50, 0.78, 1.0, 1.0]),
         UpdateState::Installed { tag } =>
             (format!("Restart GW2 to load {tag}"), [0.95, 0.75, 0.40, 1.0]),
         UpdateState::Failed { msg } =>
@@ -238,7 +238,7 @@ fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32) {
 
     // "parsing…" label to the right of the icon, slightly muted, alpha
     // pulses with the beat.
-    let label = "parsing\u{2026}";
+    let label = "parsing...";
     let mut text_color = TEXT_MUTED;
     text_color[3] = 0.60 + 0.35 * intensity;
     draw.add_text([cx + base_size * 0.6 + 8.0, label_y], text_color, label);

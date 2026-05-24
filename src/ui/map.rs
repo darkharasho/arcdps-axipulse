@@ -617,9 +617,9 @@ fn render_tile_fetch_progress(ui: &Ui) {
         FetchState::Running { done, total, failed } => {
             let pct = if total == 0 { 0.0 } else { done as f32 / total as f32 };
             let label = if failed == 0 {
-                format!("Downloading map tiles\u{2026} {done}/{total}")
+                format!("Downloading map tiles... {done}/{total}")
             } else {
-                format!("Downloading map tiles\u{2026} {done}/{total} ({failed} failed)")
+                format!("Downloading map tiles... {done}/{total} ({failed} failed)")
             };
             ui.text_colored([0.50, 0.78, 1.0, 1.0], &label);
             arcdps::imgui::ProgressBar::new(pct)

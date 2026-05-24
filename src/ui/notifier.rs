@@ -53,7 +53,7 @@ pub fn render(ui: &Ui, config: &mut Config) {
             let t = ui.time() as f32;
             let pulse = 0.5 + 0.5 * ((t * 3.0).sin());
             let alpha = 0.55 + 0.15 * pulse;
-            (alpha, [0.31, 0.86, 0.61, 1.0], "Parsing\u{2026}",
+            (alpha, [0.31, 0.86, 0.61, 1.0], "Parsing...",
              vec![(name.to_string(), [0.97, 0.97, 1.0, 1.0])])
         }
         Msg::Parsed(toast, age) => {
