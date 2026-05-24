@@ -21,6 +21,7 @@ pub mod timeline_distance;
 pub mod timeline_health;
 pub mod top_heals;
 pub mod top_skills;
+pub mod updater;
 
 #[cfg(windows)]
 pub mod plugin;
