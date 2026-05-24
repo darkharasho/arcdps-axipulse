@@ -70,6 +70,10 @@ pub fn init() -> Result<(), Option<String>> {
         .ok().map(|c| c.auto_update_check).unwrap_or(true);
     crate::updater::kick_check_on_load(auto_update_check);
 
+    // Tile fetcher: warm the WvW map tile sidecar in the background
+    // so the Map tab works for users who never ran fetch_tiles.sh.
+    crate::tile_fetcher::kick_on_init();
+
     Ok(())
 }
 

@@ -611,7 +611,31 @@ fn collect_positions_at_time<'a>(
 }
 
 #[cfg(windows)]
+fn render_tile_fetch_progress(ui: &Ui) {
+    use crate::tile_fetcher::{snapshot, FetchState};
+    match snapshot() {
+        FetchState::Running { done, total, failed } => {
+            let pct = if total == 0 { 0.0 } else { done as f32 / total as f32 };
+            let label = if failed == 0 {
+                format!("Downloading map tiles\u{2026} {done}/{total}")
+            } else {
+                format!("Downloading map tiles\u{2026} {done}/{total} ({failed} failed)")
+            };
+            ui.text_colored([0.50, 0.78, 1.0, 1.0], &label);
+            arcdps::imgui::ProgressBar::new(pct)
+                .size([-1.0, 4.0])
+                .overlay_text("")
+                .build(ui);
+        }
+        FetchState::Failed(msg) => {
+            ui.text_colored([1.00, 0.40, 0.40, 1.0], format!("Tile fetch failed: {msg}"));
+        }
+        _ => {}
+    }
+}
+
 pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, log_path: &std::path::PathBuf) {
+    render_tile_fetch_progress(ui);
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
     let _ = sync_fight_key(log_path);

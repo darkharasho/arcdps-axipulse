@@ -58,25 +58,14 @@ keeping the main AxiPulse window open.
 3. Launch GW2. Confirm by opening the ArcDPS options window — an
    **AxiPulse** entry should appear.
 
-The WvW Map tab needs the GW2 map tiles (~25 MB). They are not shipped
-with the DLL. Grab `scripts/fetch_tiles.sh` from the repo and run it
-once — it knows where to put the tiles:
+The WvW Map tab needs the GW2 map tiles (~25 MB). The plugin
+auto-downloads them in the background on first run, into
+`<addons>/axipulse-assets/tiles/`. The Map tab shows a progress strip
+while the cache warms; once complete, the tiles are reused for all
+future sessions.
 
-```
-# auto-detect a Steam GW2 install
-./fetch_tiles.sh
-
-# or point it at your addons folder explicitly
-AXIPULSE_INSTALL_DIR="C:/Program Files (x86)/Steam/steamapps/common/Guild Wars 2/addons" \
-    ./fetch_tiles.sh
-
-# or pass the full destination
-./fetch_tiles.sh --out "<gw2>/addons/axipulse-assets/tiles"
-```
-
-Needs `bash` + `curl` (git-bash, MSYS, or WSL all work on Windows).
-Without the tiles the rest of the plugin still works; the Map tab will
-just render without a background.
+The rest of the plugin (Pulse / Timeline / Notifier) works while the
+tiles are still downloading — only the Map tab background needs them.
 
 To uninstall, delete `arcdps_axipulse.dll` (and the `axipulse-assets/`
 folder, if you grabbed it) and restart GW2.

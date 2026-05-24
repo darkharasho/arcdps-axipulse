@@ -19,6 +19,7 @@ pub mod timeline_boons;
 pub mod timeline_buckets;
 pub mod timeline_distance;
 pub mod timeline_health;
+pub mod tile_fetcher;
 pub mod top_heals;
 pub mod top_skills;
 pub mod updater;
