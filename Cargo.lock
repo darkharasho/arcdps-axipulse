@@ -78,6 +78,7 @@ dependencies = [
  "log",
  "notify",
  "once_cell",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
