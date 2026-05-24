@@ -1,13 +1,99 @@
 #!/usr/bin/env bash
 # scripts/fetch_tiles.sh
-# Download every WvW map tile (z0..z7, all 4 maps) into src/assets/tiles/
-# so the plugin can render the WvW combat replay without runtime network.
-# Idempotent: skips tiles that already exist on disk.
+# Download every WvW map tile (z0..z7, all 4 maps) so the plugin can
+# render the WvW combat replay without runtime network. Idempotent:
+# skips tiles already on disk.
+#
+# Destination resolution (first match wins):
+#   1. --out <dir>                exact tile dir
+#   2. AXIPULSE_TILES_DEST=<dir>   exact tile dir
+#   3. AXIPULSE_INSTALL_DIR=<dir>  uses <dir>/axipulse-assets/tiles
+#   4. Repo checkout              uses <repo>/src/assets/tiles
+#   5. Steam GW2 auto-detect      uses <addons>/axipulse-assets/tiles
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="$REPO_ROOT/src/assets/tiles"
+OUT=""
+
+usage() {
+    cat <<USAGE
+fetch_tiles.sh - download WvW map tiles for AxiPulse
+
+Usage:
+  fetch_tiles.sh [--out <tile-dir>]
+
+Without args the script tries (in order):
+  - AXIPULSE_TILES_DEST env   (full tile dir)
+  - AXIPULSE_INSTALL_DIR env  (the GW2 'addons' folder)
+  - the repo checkout's src/assets/tiles (developer workflow)
+  - Steam's Guild Wars 2 install (auto-detected)
+
+The plugin reads tiles from <addons-dir>/axipulse-assets/tiles/<z>/<x>/<y>.jpg
+so end-users typically want either the AXIPULSE_INSTALL_DIR env or to
+let the Steam auto-detect handle it.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --out) OUT="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [[ -z "$OUT" && -n "${AXIPULSE_TILES_DEST:-}" ]]; then
+    OUT="$AXIPULSE_TILES_DEST"
+fi
+if [[ -z "$OUT" && -n "${AXIPULSE_INSTALL_DIR:-}" ]]; then
+    OUT="$AXIPULSE_INSTALL_DIR/axipulse-assets/tiles"
+fi
+if [[ -z "$OUT" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [[ -f "$SCRIPT_DIR/../Cargo.toml" ]] \
+        && grep -q '^name = "arcdps_axipulse"' "$SCRIPT_DIR/../Cargo.toml" 2>/dev/null; then
+        OUT="$(cd "$SCRIPT_DIR/.." && pwd)/src/assets/tiles"
+    fi
+fi
+if [[ -z "$OUT" ]]; then
+    # Best-effort Steam install probe: covers the common Windows
+    # (git-bash / MSYS / WSL) and macOS Steam layouts.
+    candidates=(
+        "/c/Program Files (x86)/Steam/steamapps/common/Guild Wars 2/addons"
+        "/c/Program Files/Steam/steamapps/common/Guild Wars 2/addons"
+        "/c/SteamLibrary/steamapps/common/Guild Wars 2/addons"
+        "/d/SteamLibrary/steamapps/common/Guild Wars 2/addons"
+        "/e/SteamLibrary/steamapps/common/Guild Wars 2/addons"
+        "/f/SteamLibrary/steamapps/common/Guild Wars 2/addons"
+        "/d/Program Files (x86)/Steam/steamapps/common/Guild Wars 2/addons"
+        "/mnt/c/Program Files (x86)/Steam/steamapps/common/Guild Wars 2/addons"
+        "/mnt/c/Program Files/Steam/steamapps/common/Guild Wars 2/addons"
+        "/mnt/c/SteamLibrary/steamapps/common/Guild Wars 2/addons"
+        "/mnt/d/SteamLibrary/steamapps/common/Guild Wars 2/addons"
+        "$HOME/Library/Application Support/Steam/steamapps/common/Guild Wars 2/addons"
+    )
+    for c in "${candidates[@]}"; do
+        if [[ -d "$c" ]]; then
+            OUT="$c/axipulse-assets/tiles"
+            echo "auto-detected GW2 install: $c" >&2
+            break
+        fi
+    done
+fi
+if [[ -z "$OUT" ]]; then
+    cat >&2 <<ERR
+Could not figure out where to put the tiles.
+
+Pick one:
+  fetch_tiles.sh --out <path>
+  AXIPULSE_INSTALL_DIR=<gw2>/addons fetch_tiles.sh
+  AXIPULSE_TILES_DEST=<path> fetch_tiles.sh
+
+The plugin expects tiles at <addons>/axipulse-assets/tiles/<z>/<x>/<y>.jpg
+ERR
+    exit 1
+fi
+
 mkdir -p "$OUT"
 
 # Continent rectangles in continent-pixel space, mirrored from
@@ -42,7 +128,7 @@ for z in 0 1 2 3 4 5 6 7; do
 done
 
 total=${#SEEN[@]}
-echo "fetching $total WvW tiles → $OUT" >&2
+echo "fetching $total WvW tiles -> $OUT" >&2
 i=0
 for key in "${!SEEN[@]}"; do
     IFS=/ read -r z tx ty <<< "$key"
