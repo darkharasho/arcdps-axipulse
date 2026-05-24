@@ -25,6 +25,8 @@ pub struct Config {
     /// AxiPulse window.
     pub show_notifications: bool,
     pub notifications_pos: Option<(f32, f32)>,
+    /// Background check for a newer release on plugin init.
+    pub auto_update_check: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +66,7 @@ impl Default for Config {
             toggle_visibility_hotkey: String::new(),
             show_notifications: true,
             notifications_pos: None,
+            auto_update_check: true,
         }
     }
 }
