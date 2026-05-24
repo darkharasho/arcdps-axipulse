@@ -142,6 +142,44 @@ fn render_header(ui: &Ui, state: &AppState) {
 
     // Park the cursor at the bottom of the row for downstream layout.
     ui.set_cursor_screen_pos([cursor[0], cursor[1] + row_h]);
+    render_update_pill(ui);
+}
+
+fn render_update_pill(ui: &arcdps::imgui::Ui) {
+    use crate::updater::{snapshot, start_install, dismiss_error, UpdateState};
+    let st = snapshot();
+    let (label, color) = match &st {
+        UpdateState::Available { tag, .. } =>
+            (format!("Update available \u{00b7} {tag}"), [0.40, 0.92, 0.55, 1.0]),
+        UpdateState::Downloading { pct, .. } if pct.is_finite() =>
+            (format!("Downloading\u{2026} {:.0}%", pct), [0.50, 0.78, 1.0, 1.0]),
+        UpdateState::Downloading { .. } =>
+            ("Downloading\u{2026}".to_string(), [0.50, 0.78, 1.0, 1.0]),
+        UpdateState::Installed { tag } =>
+            (format!("Restart GW2 to load {tag}"), [0.95, 0.75, 0.40, 1.0]),
+        UpdateState::Failed { msg } =>
+            (format!("Update failed: {msg}"), [1.00, 0.40, 0.40, 1.0]),
+        _ => return,
+    };
+    ui.same_line();
+    ui.text_colored(color, &label);
+    if let UpdateState::Available { .. } = &st {
+        ui.same_line();
+        if ui.small_button("Install") {
+            if let Some(dir) = crate::plugin::dll_dir() {
+                start_install(dir);
+            }
+        }
+    }
+    if let UpdateState::Failed { .. } = &st {
+        ui.same_line();
+        if ui.small_button("\u{00d7}##dismiss-update") { dismiss_error(); }
+    }
+    if let UpdateState::Available { body, .. } = &st {
+        if !body.is_empty() && ui.collapsing_header("What's new", arcdps::imgui::TreeNodeFlags::empty()) {
+            ui.text_wrapped(body);
+        }
+    }
 }
 
 /// Heartbeat icon (lucide Activity) pulsed in scale + alpha, mirroring
