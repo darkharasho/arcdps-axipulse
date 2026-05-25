@@ -572,6 +572,47 @@ struct PlayerDot<'a> {
 }
 
 #[cfg(windows)]
+struct EnemyDot<'a> {
+    profession: &'a str,
+    x: f32,
+    y: f32,
+    status: MemberStatus,
+}
+
+#[cfg(windows)]
+fn collect_enemy_positions_at_time<'a>(
+    json: &'a EiJson,
+    time_ms: u64,
+) -> Vec<EnemyDot<'a>> {
+    let polling_rate = json
+        .combat_replay_meta_data
+        .as_ref()
+        .and_then(|m| m.polling_rate)
+        .unwrap_or(150);
+    let mut out = Vec::new();
+    for t in &json.targets {
+        if !t.enemy_player || t.is_fake { continue; }
+        let Some(rd) = t.combat_replay_data.as_ref() else { continue };
+        if rd.positions.is_empty() { continue; }
+        let Some((x, y)) = lerp_position(&rd.positions, time_ms, polling_rate) else { continue };
+        // EI names enemies like "Firebrand pl-42"; the prefix before
+        // " pl-N" is the elite-spec display name and matches our
+        // bundled class-icon keys exactly.
+        let prof = t.profession.as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| t.name.split(" pl-").next().filter(|s| !s.is_empty()))
+            .unwrap_or("");
+        out.push(EnemyDot {
+            profession: prof,
+            x: x as f32,
+            y: y as f32,
+            status: status_at(&rd.dead, &rd.down, time_ms),
+        });
+    }
+    out
+}
+
+#[cfg(windows)]
 fn collect_positions_at_time<'a>(
     json: &'a EiJson,
     self_idx: usize,
@@ -808,6 +849,42 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 let r = r_base * marker_scale;
                 draw.add_circle([cx, cy], r, color).filled(true).build();
                 draw.add_text([cx + r + 2.0, cy - 6.0], TEXT_MUTED, lm.name);
+            }
+
+            // Enemy markers — drawn before allies so squad icons sit on top.
+            // Match upstream MovementView: class icon, tinted red, at 30% opacity.
+            let enemies = collect_enemy_positions_at_time(json, time_ms);
+            for e in &enemies {
+                let cx = ox + e.x * scale;
+                let cy = oy + e.y * scale;
+                let sz = 14.0 * marker_scale;
+                let half = sz * 0.5;
+                match e.status {
+                    MemberStatus::Dead => {
+                        let r = 4.5 * marker_scale;
+                        draw.add_circle([cx, cy], r, [0.94, 0.27, 0.27, 0.3]).filled(true).build();
+                        let h = r * 0.55;
+                        draw.add_line([cx - h, cy - h], [cx + h, cy + h], [0.55, 0.10, 0.10, 0.6]).thickness(1.4 * marker_scale).build();
+                        draw.add_line([cx + h, cy - h], [cx - h, cy + h], [0.55, 0.10, 0.10, 0.6]).thickness(1.4 * marker_scale).build();
+                    }
+                    MemberStatus::Down => {
+                        let r = 4.5 * marker_scale;
+                        draw.add_circle([cx, cy], r, [0.94, 0.27, 0.27, 0.3]).filled(true).build();
+                        draw.add_circle([cx, cy], r, [0.55, 0.10, 0.10, 0.5]).thickness(1.0 * marker_scale).build();
+                    }
+                    MemberStatus::Alive => {
+                        if let Some(icon) = crate::ui::icons::lookup_bundled(e.profession) {
+                            // Tint multiplier: kill green/blue, keep red, 30% alpha.
+                            // Approximates the SVG red-tint+0.3-opacity filter
+                            // upstream applies to enemy icons.
+                            draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half])
+                                .col([1.0, 0.25, 0.25, 0.3])
+                                .build();
+                        } else {
+                            draw.add_circle([cx, cy], 4.0 * marker_scale, [0.94, 0.27, 0.27, 0.3]).filled(true).build();
+                        }
+                    }
+                }
             }
 
             // Time-indexed player positions.

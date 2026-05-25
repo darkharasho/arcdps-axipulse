@@ -296,10 +296,14 @@ pub struct EiTarget {
     pub name: String,
     #[serde(default)]
     pub enemy_player: bool,
+    #[serde(default)]
+    pub is_fake: bool,
     #[serde(default, alias = "teamID", alias = "teamId")]
     pub team_id: Option<i64>,
     #[serde(default)]
     pub profession: Option<String>,
+    #[serde(default)]
+    pub combat_replay_data: Option<ReplayData>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
