@@ -406,7 +406,10 @@ fn render_party_panel(
         let icon_x = panel_origin[0] + pad;
         let icon_y = row_y0 + 6.0;
         if let Some(icon) = crate::ui::icons::lookup_bundled(p.profession.as_str()) {
-            draw.add_image(icon.tex, [icon_x, icon_y], [icon_x + icon_size, icon_y + icon_size]).build();
+            let (iw, ih) = fit_aspect(icon.aspect, icon_size);
+            let cx = icon_x + icon_size * 0.5;
+            let cy = icon_y + icon_size * 0.5;
+            draw.add_image(icon.tex, [cx - iw * 0.5, cy - ih * 0.5], [cx + iw * 0.5, cy + ih * 0.5]).build();
         }
 
         let name_x = icon_x + icon_size + 8.0;
@@ -543,6 +546,15 @@ fn find_commander_position(json: &EiJson, time_ms: u64) -> Option<(f64, f64)> {
         }
     }
     None
+}
+
+/// Letterbox-fit an icon (with `aspect = w/h`) inside a `box_size` square.
+/// Returns the (width, height) to draw so the icon keeps its natural
+/// proportions and the larger side equals `box_size`.
+#[cfg(windows)]
+fn fit_aspect(aspect: f32, box_size: f32) -> (f32, f32) {
+    if aspect >= 1.0 { (box_size, box_size / aspect) }
+    else             { (box_size * aspect, box_size) }
 }
 
 #[cfg(windows)]
@@ -858,7 +870,6 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 let cx = ox + e.x * scale;
                 let cy = oy + e.y * scale;
                 let sz = 14.0 * marker_scale;
-                let half = sz * 0.5;
                 match e.status {
                     MemberStatus::Dead => {
                         let r = 4.5 * marker_scale;
@@ -877,7 +888,12 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                             // Tint multiplier: kill green/blue, keep red, 30% alpha.
                             // Approximates the SVG red-tint+0.3-opacity filter
                             // upstream applies to enemy icons.
-                            draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half])
+                            let (iw, ih) = fit_aspect(icon.aspect, sz);
+                            draw.add_image(
+                                icon.tex,
+                                [cx - iw * 0.5, cy - ih * 0.5],
+                                [cx + iw * 0.5, cy + ih * 0.5],
+                            )
                                 .col([1.0, 0.25, 0.25, 0.3])
                                 .build();
                         } else {
@@ -962,7 +978,12 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                                     .thickness(2.0 * marker_scale)
                                     .build();
                             }
-                            draw.add_image(icon.tex, [cx - half, cy - half], [cx + half, cy + half]).build();
+                            let (iw, ih) = fit_aspect(icon.aspect, sz_alive);
+                            draw.add_image(
+                                icon.tex,
+                                [cx - iw * 0.5, cy - ih * 0.5],
+                                [cx + iw * 0.5, cy + ih * 0.5],
+                            ).build();
                         } else {
                             let r: f32 = (if dot.is_self { 5.5 } else { 4.0 }) * marker_scale;
                             let color: [f32; 4] = if dot.is_self { [0.06, 0.72, 0.51, 0.95] } else { [0.86, 0.86, 0.92, 0.85] };
