@@ -844,8 +844,11 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
 
             // Marker / landmark / trail sizes grow sub-linearly with the
             // user's zoom so they stay readable against the now-larger
-            // map but don't dominate the screen at extreme zoom.
-            let marker_scale = user_scale.sqrt().max(1.0);
+            // map but don't dominate the screen at extreme zoom. The
+            // 0.3 exponent matches axipulse upstream's combined
+            // world-scale * markerScale of `view.scale^0.3` — icons
+            // shrink slightly when zoomed out, grow modestly when in.
+            let marker_scale = user_scale.powf(0.3);
 
             // Landmark pins.
             for lm in landmarks(map) {
