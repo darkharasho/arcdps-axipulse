@@ -70,6 +70,26 @@ tiles are still downloading — only the Map tab background needs them.
 To uninstall, delete `arcdps_axipulse.dll` (and the `axipulse-assets/`
 folder, if you grabbed it) and restart GW2.
 
+## Windows SmartScreen / Defender
+
+The DLL is unsigned and built fresh on every release, so Windows
+Defender's ML heuristics sometimes flag it as `Trojan:Win32/Wacatac.B!ml`
+or similar. This is a false positive — it's a known issue with unsigned
+Rust DLLs that have low download counts. Each release is submitted to
+Microsoft for review and usually clears within a day.
+
+If Defender quarantined the file, you can restore and allow it:
+
+1. Open **Windows Security → Virus & threat protection → Protection history**
+2. Find the `arcdps_axipulse.dll` entry, click **Actions → Allow**
+3. Re-download from the [release page](https://github.com/darkharasho/arcdps-axipulse/releases/latest)
+
+Or, if you downloaded it but haven't moved it yet, right-click the DLL,
+**Properties**, tick **Unblock**, and click **OK**.
+
+If you'd rather wait for the Microsoft re-scan, just hold off a day and
+try again.
+
 ## Build from source
 
 Target is `x86_64-pc-windows-msvc`. From Linux, cross-compile via
