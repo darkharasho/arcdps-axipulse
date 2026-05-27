@@ -57,3 +57,18 @@ fn raw_red_desert_borderlands() {
 fn raw_eternal_battlegrounds() {
     assert_eq!(resolve_map_from_zone("Eternal Battlegrounds"), Some(WvwMap::EternalBattlegrounds));
 }
+
+#[test]
+fn raw_edge_of_the_mists() {
+    assert_eq!(resolve_map_from_zone("Edge of the Mists"), Some(WvwMap::EdgeOfTheMists));
+}
+
+#[test]
+fn eotm_short_form() {
+    assert_eq!(resolve_map_from_zone("EotM"), Some(WvwMap::EdgeOfTheMists));
+}
+
+#[test]
+fn prefixed_edge_of_the_mists() {
+    assert_eq!(resolve_map_from_zone("WvW - Edge of the Mists"), Some(WvwMap::EdgeOfTheMists));
+}

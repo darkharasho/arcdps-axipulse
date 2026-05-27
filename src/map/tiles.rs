@@ -41,6 +41,11 @@ fn tile_data(map: WvwMap) -> WvwTileData {
             pixel_size: [750.0, 750.0],
             pixel_offset: [0.0, 0.0],
         },
+        WvwMap::EdgeOfTheMists => WvwTileData {
+            continent_rect: [[0.0, 0.0], [0.0, 0.0]],
+            pixel_size: [0.0, 0.0],
+            pixel_offset: [0.0, 0.0],
+        },
     }
 }
 

@@ -7,6 +7,7 @@ pub enum WvwMap {
     GreenBorderlands,
     BlueBorderlands,
     RedBorderlands,
+    EdgeOfTheMists,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,8 @@ pub fn resolve_map_from_zone(zone: &str) -> Option<WvwMap> {
     let clean = strip_prefix(zone).to_lowercase();
     if clean.contains("eternal") || clean == "ebg" {
         Some(WvwMap::EternalBattlegrounds)
+    } else if clean.contains("edge of the mists") || clean == "eotm" {
+        Some(WvwMap::EdgeOfTheMists)
     } else if clean.contains("green") {
         Some(WvwMap::GreenBorderlands)
     } else if clean.contains("blue") {
@@ -56,6 +59,7 @@ pub fn landmarks(map: WvwMap) -> &'static [Landmark] {
         WvwMap::GreenBorderlands => GREEN_ALPINE,
         WvwMap::BlueBorderlands => BLUE_ALPINE,
         WvwMap::RedBorderlands => RED_DESERT,
+        WvwMap::EdgeOfTheMists => &[],
     }
 }
 
