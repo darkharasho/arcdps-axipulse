@@ -1,10 +1,14 @@
 # Release Notes
 
-Version v0.1.8 — May 24, 2026
+Version v0.2.0 — May 26, 2026
 
-## Map icons look right at any zoom
+## Edge of the Mists is now a recognized WvW map
 
-Class icons on the map replay no longer stretch horizontally — they keep
-their natural proportions. They also scale with zoom now, instead of
-staying locked at one size: shrink a bit when you're zoomed out, grow
-modestly when you're zoomed in.
+Fights in Edge of the Mists are now picked up as WvW. The map renders
+on the overlay with tiles from the GW2 tile server and the three keeps
+(Overgrown Fane, Arid Fortress, Thunder Hollow), three towers, and
+their reactors placed where they actually sit on the map.
+
+NOTE: pixel alignment was derived from EI's combat-replay dimensions
+and the GW2 maps API — if dots or landmarks look slightly off in a
+real EotM log, let me know and I'll fine-tune.
