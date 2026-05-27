@@ -68,6 +68,7 @@ fn expected_tile_keys() -> Vec<(u32, u32, u32)> {
         WvwMap::GreenBorderlands,
         WvwMap::BlueBorderlands,
         WvwMap::RedBorderlands,
+        WvwMap::EdgeOfTheMists,
     ];
     let mut set: HashSet<(u32, u32, u32)> = HashSet::new();
     for zoom in 0u32..=7 {

@@ -59,7 +59,7 @@ pub fn landmarks(map: WvwMap) -> &'static [Landmark] {
         WvwMap::GreenBorderlands => GREEN_ALPINE,
         WvwMap::BlueBorderlands => BLUE_ALPINE,
         WvwMap::RedBorderlands => RED_DESERT,
-        WvwMap::EdgeOfTheMists => &[],
+        WvwMap::EdgeOfTheMists => EDGE_OF_THE_MISTS,
     }
 }
 
@@ -149,4 +149,21 @@ const RED_DESERT: &[Landmark] = &[
     Landmark { name: "Zak's Overlook",        x: 433.0, y: 444.0, kind: LandmarkType::Ruins },
     Landmark { name: "Darra's Maze",          x: 289.0, y: 513.0, kind: LandmarkType::Ruins },
     Landmark { name: "Tilly's Encampment",    x: 369.0, y: 365.0, kind: LandmarkType::Ruins },
+];
+
+// Derived from GW2 API /v2/wvw/objectives (map_id 968). Objective coords
+// are in continent-pixel space; pixel coords below are
+//   px = (coord[0] - 5994) / 3072 * 2667
+//   py = (coord[1] - 8446) / 3072 * 2734.5
+// (matching the EI combat-replay size of 3556x3646 scaled by 0.75x).
+const EDGE_OF_THE_MISTS: &[Landmark] = &[
+    Landmark { name: "Overgrown Fane",           x: 1318.0, y: 217.0,  kind: LandmarkType::Keep },
+    Landmark { name: "Arid Fortress",            x: 690.0,  y: 1753.0, kind: LandmarkType::Keep },
+    Landmark { name: "Thunder Hollow",           x: 2271.0, y: 1941.0, kind: LandmarkType::Keep },
+    Landmark { name: "Inferno's Needle",         x: 1331.0, y: 1935.0, kind: LandmarkType::Tower },
+    Landmark { name: "Tytone Perch",             x: 1838.0, y: 1080.0, kind: LandmarkType::Tower },
+    Landmark { name: "Stonegaze Spire",          x: 839.0,  y: 1086.0, kind: LandmarkType::Tower },
+    Landmark { name: "Inferno's Needle Reactor", x: 1331.0, y: 1621.0, kind: LandmarkType::Camp },
+    Landmark { name: "Tytone Perch Reactor",     x: 1553.0, y: 1251.0, kind: LandmarkType::Camp },
+    Landmark { name: "Stonegaze Spire Reactor",  x: 1108.0, y: 1240.0, kind: LandmarkType::Camp },
 ];

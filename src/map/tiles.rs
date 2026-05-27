@@ -42,8 +42,11 @@ fn tile_data(map: WvwMap) -> WvwTileData {
             pixel_offset: [0.0, 0.0],
         },
         WvwMap::EdgeOfTheMists => WvwTileData {
-            continent_rect: [[0.0, 0.0], [0.0, 0.0]],
-            pixel_size: [0.0, 0.0],
+            // EI combat-replay size for EotM is (3556, 3646); axipulse
+            // renders at 0.75x like the other maps. Map-rect is exactly
+            // centered on world origin, so no pixel_offset.
+            continent_rect: [[5994.0, 8446.0], [9066.0, 11518.0]],
+            pixel_size: [2667.0, 2734.5],
             pixel_offset: [0.0, 0.0],
         },
     }

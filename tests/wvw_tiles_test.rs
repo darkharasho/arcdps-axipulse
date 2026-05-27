@@ -34,3 +34,12 @@ fn ebg_zoom4_first_tile_negative_x() {
     let tiles = get_map_tiles(WvwMap::EternalBattlegrounds, 4);
     assert!(tiles[0].x < 0.0, "first EBG z4 tile should overlap left edge, got x={}", tiles[0].x);
 }
+
+#[test]
+fn eotm_zoom4_nonempty() {
+    // EotM continentRect 5994..9066 x 8446..11518 (3072x3072). At z4
+    // tileSpan = 2048, so tx range floor(5994/2048)..floor(9065/2048) = 2..4
+    // (3 wide), ty range floor(8446/2048)..floor(11517/2048) = 4..5 (2 tall).
+    let tiles = get_map_tiles(WvwMap::EdgeOfTheMists, 4);
+    assert_eq!(tiles.len(), 6, "expected 3x2 grid at z4 for EotM");
+}
