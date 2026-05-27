@@ -6,3 +6,4 @@
 # WvW map tiles downloaded by scripts/fetch_tiles.sh (sidecar asset, not in source)
 src/assets/tiles/
 .env
+graphify-out/
