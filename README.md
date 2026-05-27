@@ -64,6 +64,10 @@ auto-downloads them in the background on first run, into
 while the cache warms; once complete, the tiles are reused for all
 future sessions.
 
+End-users don't need to run `scripts/fetch_tiles.sh` — that script is
+a developer/offline-prep tool. Just launch GW2 and the plugin handles
+the download.
+
 The rest of the plugin (Pulse / Timeline / Notifier) works while the
 tiles are still downloading — only the Map tab background needs them.
 

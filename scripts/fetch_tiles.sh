@@ -56,9 +56,21 @@ if [[ -z "$OUT" ]]; then
     fi
 fi
 if [[ -z "$OUT" ]]; then
-    # Best-effort Steam install probe: covers the common Windows
-    # (git-bash / MSYS / WSL) and macOS Steam layouts.
+    # Best-effort GW2 install probe: covers standalone, Steam, and
+    # common library drives, across git-bash / MSYS / WSL / macOS.
     candidates=(
+        # Standalone (non-Steam) installs — the official ArenaNet client.
+        "/c/Program Files/Guild Wars 2/addons"
+        "/c/Program Files (x86)/Guild Wars 2/addons"
+        "/c/Guild Wars 2/addons"
+        "/d/Guild Wars 2/addons"
+        "/e/Guild Wars 2/addons"
+        "/f/Guild Wars 2/addons"
+        "/mnt/c/Program Files/Guild Wars 2/addons"
+        "/mnt/c/Program Files (x86)/Guild Wars 2/addons"
+        "/mnt/c/Guild Wars 2/addons"
+        "/mnt/d/Guild Wars 2/addons"
+        # Steam installs.
         "/c/Program Files (x86)/Steam/steamapps/common/Guild Wars 2/addons"
         "/c/Program Files/Steam/steamapps/common/Guild Wars 2/addons"
         "/c/SteamLibrary/steamapps/common/Guild Wars 2/addons"
