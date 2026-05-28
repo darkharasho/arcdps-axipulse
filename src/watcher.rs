@@ -20,9 +20,9 @@ where
     let (tx_work, rx_work) = mpsc::channel::<PathBuf>();
 
     // Worker: drains paths, awaits size stability, calls on_log. Serial.
-    // Runs below normal priority so the EI subprocess cold-start (process
-    // creation + .NET 8 apphost init) yields to GW2's render thread and
-    // doesn't cause a frame hitch at parse-start.
+    // Runs at THREAD_PRIORITY_LOWEST so the cmd.spawn() syscall (Wine
+    // CreateProcess + PE map + .NET 8 apphost init) yields to GW2's
+    // render thread instead of causing a ~1s stutter at parse-start.
     thread::Builder::new()
         .name("axipulse-parser".into())
         .spawn(move || {
@@ -110,10 +110,10 @@ fn is_zevtc(p: &Path) -> bool {
 
 fn lower_thread_priority() {
     use windows::Win32::System::Threading::{
-        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST,
     };
     unsafe {
-        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
     }
 }
 
