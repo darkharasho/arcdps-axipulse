@@ -143,7 +143,6 @@ type DownloadRequest = (IconKey, String, Option<PathBuf>);
 
 struct Chan {
     /// Completed downloads, drained on the imgui thread to upload SRVs.
-    tx: Sender<DownloadResult>,
     rx: Mutex<Receiver<DownloadResult>>,
     /// Requests queued for the single worker thread.
     req_tx: Sender<DownloadRequest>,
@@ -156,16 +155,25 @@ struct Chan {
 const MAX_UPLOADS_PER_FRAME: usize = 4;
 
 static CHAN: Lazy<Chan> = Lazy::new(|| {
-    let (tx, rx) = mpsc::channel::<DownloadResult>();
+    let (result_tx, rx) = mpsc::channel::<DownloadResult>();
     let (req_tx, req_rx) = mpsc::channel::<DownloadRequest>();
     // Single dedicated worker thread runs all HTTP fetches in serial.
     // Replaces the previous "thread::spawn per icon" model which fanned
     // out hundreds of threads at once on big fights.
-    let result_tx = tx.clone();
     thread::Builder::new()
         .name("axipulse-icon-worker".into())
         .spawn(move || {
             for (key, url, path) in req_rx {
+                // Try the on-disk cache first. Kept off the imgui thread so
+                // a fresh fight's worth of icon reads can't stutter render.
+                if let Some(p) = path.as_ref() {
+                    if p.exists() {
+                        if let Ok(bytes) = std::fs::read(p) {
+                            let _ = result_tx.send((key, Ok(bytes)));
+                            continue;
+                        }
+                    }
+                }
                 match ureq::get(&url).timeout(std::time::Duration::from_secs(20)).call() {
                     Ok(resp) => {
                         let mut bytes: Vec<u8> = Vec::new();
@@ -184,7 +192,7 @@ static CHAN: Lazy<Chan> = Lazy::new(|| {
             }
         })
         .ok();
-    Chan { tx, rx: Mutex::new(rx), req_tx }
+    Chan { rx: Mutex::new(rx), req_tx }
 });
 
 /// Look up an icon by `(kind, id)`. Returns `Some` once the texture has
@@ -222,18 +230,10 @@ pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
     };
     if let Ok(mut c) = CACHE.lock() { c.by_key.insert(key, State::Pending); }
 
-    let path = disk_path(key);
-    if let Some(p) = path.as_ref() {
-        if p.exists() {
-            if let Ok(bytes) = std::fs::read(p) {
-                let _ = CHAN.tx.send((key, Ok(bytes)));
-                return None;
-            }
-        }
-    }
-    // Route through the single download worker; one HTTP fetch in flight
-    // at a time. Avoids spawning hundreds of threads when a big fight lands.
-    let _ = CHAN.req_tx.send((key, url, path));
+    // Route through the single worker; it tries the disk cache first,
+    // then falls back to HTTP. Keeping the disk read off the imgui
+    // thread avoids per-fight render stutter on big skill rosters.
+    let _ = CHAN.req_tx.send((key, url, disk_path(key)));
     None
 }
 
