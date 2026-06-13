@@ -1,14 +1,10 @@
 # Release Notes
 
-Version v0.2.3 — June 13, 2026
+Version v0.2.4 — June 13, 2026
 
-## Smoother parsing
+## Smoother first frame on a new fight
 
-No more second-long freeze when a new log lands. The Elite Insights
-parser is a .NET app, and under Wine its startup was spinning up a pile
-of background threads all at once — enough to stall the game for a beat
-every time a fight ended. It now starts lean, so parsing stays out of
-your way.
-
-NOTE: If you still feel a hitch on very large fights, let me know — there's
-a deeper CPU-isolation fix I can apply next.
+When a fight wrapped, the overlay decoded all the skill and buff icons
+on the render thread, which showed up as a brief stutter the moment the
+new fight popped in. That work now happens off to the side, so the
+first frame stays smooth.
