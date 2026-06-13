@@ -1,7 +1,14 @@
 # Release Notes
 
-Version v0.2.2 — May 31, 2026
+Version v0.2.3 — June 13, 2026
 
-## Smoother end-of-fight transition
+## Smoother parsing
 
-That small stutter that hit right as the "Parsed" toast appeared after a fight is gone. The cached-icon read for each new skill/buff was happening on the render thread; now it runs on the icon worker so the frame that flips to the new fight doesn't have to wait on disk.
+No more second-long freeze when a new log lands. The Elite Insights
+parser is a .NET app, and under Wine its startup was spinning up a pile
+of background threads all at once — enough to stall the game for a beat
+every time a fight ended. It now starts lean, so parsing stays out of
+your way.
+
+NOTE: If you still feel a hitch on very large fights, let me know — there's
+a deeper CPU-isolation fix I can apply next.

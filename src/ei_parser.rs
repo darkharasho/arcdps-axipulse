@@ -85,6 +85,18 @@ pub fn parse_log(
     if dotnet.join("dotnet.exe").exists() {
         cmd.env("DOTNET_ROOT", &dotnet);
     }
+    // Tame the .NET cold-start burst that freezes GW2's render thread under
+    // Wine. IDLE_PRIORITY_CLASS only throttles CPU *scheduling*; it does
+    // nothing about the CLR spawning a GC heap + dedicated GC thread per
+    // logical CPU at startup. Under server GC on a many-core box that's a
+    // dozen-plus thread creations crammed into the first few ms, each one
+    // serialized through Wine's single-threaded wineserver — which is what
+    // stalls the render thread. Force workstation GC with a single heap so
+    // startup creates one GC thread instead of N, and disable background
+    // (concurrent) GC so there's no extra background collector thread either.
+    cmd.env("DOTNET_gcServer", "0");
+    cmd.env("DOTNET_GCHeapCount", "1");
+    cmd.env("DOTNET_gcConcurrent", "0");
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS);
     let mut child = cmd.spawn().map_err(ParseError::SubprocessSpawn)?;
