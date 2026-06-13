@@ -138,8 +138,22 @@ static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| Mutex::new(Cache {
     _srvs: Vec::new(),
 }));
 
-type DownloadResult = (IconKey, Result<Vec<u8>, String>);
+/// Fully decoded icon: RGBA8 pixels plus dimensions. Decoding (the
+/// expensive `image::load_from_memory` PNG walk) happens on the worker
+/// thread so the imgui thread only does the cheap D3D11 upload.
+struct Decoded { w: u32, h: u32, aspect: f32, rgba: Vec<u8> }
+
+type DownloadResult = (IconKey, Result<Decoded, String>);
 type DownloadRequest = (IconKey, String, Option<PathBuf>);
+
+/// Decode PNG/JPEG bytes to RGBA8 + dimensions. Pure CPU work, run on
+/// the icon worker thread.
+fn decode(bytes: &[u8]) -> Result<Decoded, String> {
+    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let aspect = if h > 0 { w as f32 / h as f32 } else { 1.0 };
+    Ok(Decoded { w, h, aspect, rgba: img.into_raw() })
+}
 
 struct Chan {
     /// Completed downloads, drained on the imgui thread to upload SRVs.
@@ -169,7 +183,7 @@ static CHAN: Lazy<Chan> = Lazy::new(|| {
                 if let Some(p) = path.as_ref() {
                     if p.exists() {
                         if let Ok(bytes) = std::fs::read(p) {
-                            let _ = result_tx.send((key, Ok(bytes)));
+                            let _ = result_tx.send((key, decode(&bytes)));
                             continue;
                         }
                     }
@@ -185,7 +199,8 @@ static CHAN: Lazy<Chan> = Lazy::new(|| {
                             if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
                             let _ = std::fs::write(&p, &bytes);
                         }
-                        let _ = result_tx.send((key, Ok(bytes)));
+                        // Decode on this worker thread, not the imgui thread.
+                        let _ = result_tx.send((key, decode(&bytes)));
                     }
                     Err(e) => { let _ = result_tx.send((key, Err(e.to_string()))); }
                 }
@@ -286,12 +301,12 @@ pub fn drain_pending() {
         };
         uploaded += 1;
         let new_state = match result {
-            Ok(bytes) => match unsafe { upload(&device, &bytes) } {
-                Ok((srv, aspect)) => {
+            Ok(d) => match unsafe { create_srv(&device, d.w, d.h, &d.rgba) } {
+                Ok(srv) => {
                     let ptr = srv.as_raw() as usize;
                     let mut c = match CACHE.lock() { Ok(c) => c, Err(_) => continue };
                     c._srvs.push(srv);
-                    State::Ready { ptr, aspect }
+                    State::Ready { ptr, aspect: d.aspect }
                 }
                 Err(e) => {
                     log::warn!("axipulse icon: upload failed for {:?}: {e}", key);
@@ -316,14 +331,27 @@ fn disk_path(key: IconKey) -> Option<PathBuf> {
     Some(p)
 }
 
+/// Decode + upload in one shot. Used only by the bundled-preload path
+/// (decodes ~45 baked-in PNGs once at startup). The per-fight URL path
+/// decodes on the worker thread and calls `create_srv` directly.
 unsafe fn upload(
     device: &ID3D11Device,
     bytes: &[u8],
 ) -> Result<(ID3D11ShaderResourceView, f32), Box<dyn std::error::Error>> {
-    let img = image::load_from_memory(bytes)?.to_rgba8();
-    let (w, h) = (img.width(), img.height());
-    let aspect = if h > 0 { w as f32 / h as f32 } else { 1.0 };
-    let pixels = img.into_raw();
+    let d = decode(bytes)?;
+    let srv = create_srv(device, d.w, d.h, &d.rgba)?;
+    Ok((srv, d.aspect))
+}
+
+/// GPU-only: create a texture + SRV from pre-decoded RGBA8 pixels. Must
+/// run on the imgui thread (the only place the D3D11 device is safe to
+/// touch). No CPU decode happens here.
+unsafe fn create_srv(
+    device: &ID3D11Device,
+    w: u32,
+    h: u32,
+    pixels: &[u8],
+) -> Result<ID3D11ShaderResourceView, Box<dyn std::error::Error>> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: w,
         Height: h,
@@ -346,5 +374,5 @@ unsafe fn upload(
     let mut srv: Option<ID3D11ShaderResourceView> = None;
     device.CreateShaderResourceView(&tex, None, Some(&mut srv))?;
     let srv = srv.ok_or("CreateShaderResourceView returned null")?;
-    Ok((srv, aspect))
+    Ok(srv)
 }
