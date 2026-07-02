@@ -27,6 +27,12 @@ pub struct EiJson {
     pub targets: Vec<EiTarget>,
     #[serde(default)]
     pub combat_replay_meta_data: Option<EiReplayMeta>,
+    /// Authoritative red/green/blue team ids for this log, from the
+    /// arcdps CBTS_WVWTEAMS statechange event. Absent on older logs
+    /// (pre-~May 2026); consumers fall back to the fixed id tables in
+    /// `wvw_teams`. EI emits the odd `wvWMapData` casing.
+    #[serde(default, rename = "wvWMapData", alias = "wvwMapData")]
+    pub wvw_map_data: Option<WvwMapData>,
     /// Skill ID (string-prefixed with `s`, e.g. `"s5535"`) → metadata.
     /// EI emits this at the top level; `totalDamageDist[].name` is blank
     /// in WvW logs so this is the authoritative source for display names.
@@ -35,6 +41,17 @@ pub struct EiJson {
     /// Buff ID (string-prefixed with `b`, e.g. `"b740"`) → metadata.
     #[serde(default)]
     pub buff_map: HashMap<String, BuffMapEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WvwMapData {
+    #[serde(default, rename = "redTeamID", alias = "redTeamId")]
+    pub red_team_id: i64,
+    #[serde(default, rename = "greenTeamID", alias = "greenTeamId")]
+    pub green_team_id: i64,
+    #[serde(default, rename = "blueTeamID", alias = "blueTeamId")]
+    pub blue_team_id: i64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

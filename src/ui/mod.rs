@@ -17,6 +17,8 @@ pub mod options;
 #[cfg(windows)]
 pub mod pulse;
 #[cfg(windows)]
+pub mod team_bar;
+#[cfg(windows)]
 pub mod tile_cache;
 #[cfg(windows)]
 pub mod timeline;

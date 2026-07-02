@@ -16,6 +16,11 @@ pub fn render_window_checkboxes(ui: &Ui, config: &mut Config) -> bool {
         config.show_pulse = show;
         changed = true;
     }
+    let mut show_bar = config.show_team_bar;
+    if ui.checkbox("AxiPulse Team Bar", &mut show_bar) {
+        config.show_team_bar = show_bar;
+        changed = true;
+    }
     changed
 }
 
@@ -40,6 +45,22 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
     ui.text_disabled(
         "Transparent toast that flashes when a new log starts parsing and \
          when it finishes — works even with the main window hidden.",
+    );
+
+    ui.separator();
+    let mut show_bar = config.show_team_bar;
+    if ui.checkbox("Show team bar", &mut show_bar) {
+        config.show_team_bar = show_bar;
+        dirty = true;
+    }
+    let mut compact = config.team_bar_compact;
+    if ui.checkbox("Compact team bar", &mut compact) {
+        config.team_bar_compact = compact;
+        dirty = true;
+    }
+    ui.text_disabled(
+        "Persistent stacked bar of red/green/blue player counts from the \
+         latest fight. Compact hides the map header, glow, and legend.",
     );
 
     ui.separator();

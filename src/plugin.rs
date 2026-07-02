@@ -95,6 +95,7 @@ pub fn imgui(ui: &arcdps::imgui::Ui, not_loading: bool) {
         };
         crate::ui::main::render(ui, &state, &mut config);
         crate::ui::notifier::render(ui, &mut config);
+        crate::ui::team_bar::render(ui, &state, &mut config);
     }));
 }
 

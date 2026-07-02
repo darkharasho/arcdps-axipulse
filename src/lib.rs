@@ -23,6 +23,7 @@ pub mod tile_fetcher;
 pub mod top_heals;
 pub mod top_skills;
 pub mod updater;
+pub mod wvw_teams;
 
 #[cfg(windows)]
 pub mod plugin;

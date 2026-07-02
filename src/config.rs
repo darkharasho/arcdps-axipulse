@@ -25,6 +25,12 @@ pub struct Config {
     /// AxiPulse window.
     pub show_notifications: bool,
     pub notifications_pos: Option<(f32, f32)>,
+    /// Small persistent window with a single stacked bar of the
+    /// red/green/blue player counts from the latest parsed fight.
+    pub show_team_bar: bool,
+    pub team_bar_pos: Option<(f32, f32)>,
+    /// Bar-only rendering: no map header, glow strip, or legend.
+    pub team_bar_compact: bool,
     /// Background check for a newer release on plugin init.
     pub auto_update_check: bool,
 }
@@ -66,6 +72,9 @@ impl Default for Config {
             toggle_visibility_hotkey: String::new(),
             show_notifications: true,
             notifications_pos: None,
+            show_team_bar: false,
+            team_bar_pos: None,
+            team_bar_compact: false,
             auto_update_check: true,
         }
     }
