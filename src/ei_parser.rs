@@ -21,6 +21,11 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(windows)]
 const IDLE_PRIORITY_CLASS: u32 = 0x0000_0040;
 
+/// How many logical CPUs the EI subprocess may use. Kept small so GW2's
+/// render/worker threads always have uncontended cores during a parse;
+/// EI takes a little longer but the game never hitches.
+const EI_CORES: u32 = 2;
+
 use crate::ei_bundle::{dotnet_root, ei_cli_exe};
 use crate::ei_model::EiJson;
 use crate::ei_settings::{generate_ei_conf, EiSettings};
@@ -97,9 +102,20 @@ pub fn parse_log(
     cmd.env("DOTNET_gcServer", "0");
     cmd.env("DOTNET_GCHeapCount", "1");
     cmd.env("DOTNET_gcConcurrent", "0");
+    // IDLE_PRIORITY_CLASS is a no-op under default Wine (priority classes
+    // don't map to Unix nice without extra privileges), so EI still
+    // competes with GW2's render thread on every core. Affinity *is*
+    // honoured (sched_setaffinity), so confine EI to EI_CORES cores via
+    // SetProcessAffinityMask after spawn, and tell the runtime the same
+    // number so the thread pool / Parallel.For / JIT sizing all shrink
+    // to match instead of spawning a per-logical-CPU thread burst
+    // through the single-threaded wineserver.
+    cmd.env("DOTNET_PROCESSOR_COUNT", EI_CORES.to_string());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS);
     let mut child = cmd.spawn().map_err(ParseError::SubprocessSpawn)?;
+    #[cfg(windows)]
+    confine_child_to_cores(&child, EI_CORES);
 
     let timeout = Duration::from_secs(600);
     let output = match wait_with_timeout(&mut child, timeout) {
@@ -132,6 +148,38 @@ pub fn parse_log(
     gz.read_to_end(&mut decompressed).map_err(ParseError::Gunzip)?;
 
     serde_json::from_slice(&decompressed).map_err(ParseError::Deserialise)
+}
+
+/// Pin `child` to the `n` highest available logical CPUs. Highest, not
+/// lowest, to stay away from core 0 where Wine parks interrupt-heavy
+/// work. Process affinity applies to threads the child has already
+/// created, so calling right after spawn covers the .NET startup burst.
+/// Best-effort: on failure EI just runs unconfined, as before.
+#[cfg(windows)]
+fn confine_child_to_cores(child: &std::process::Child, n: u32) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetProcessAffinityMask, SetProcessAffinityMask,
+    };
+    unsafe {
+        let mut proc_mask: usize = 0;
+        let mut sys_mask: usize = 0;
+        if GetProcessAffinityMask(GetCurrentProcess(), &mut proc_mask, &mut sys_mask).is_err() {
+            return;
+        }
+        let mut mask: usize = 0;
+        let mut left = n;
+        for bit in (0..usize::BITS).rev() {
+            if left == 0 { break; }
+            if sys_mask & (1usize << bit) != 0 {
+                mask |= 1usize << bit;
+                left -= 1;
+            }
+        }
+        if mask == 0 { return; }
+        let _ = SetProcessAffinityMask(HANDLE(child.as_raw_handle()), mask);
+    }
 }
 
 fn mktempdir(root: &Path) -> std::io::Result<PathBuf> {
