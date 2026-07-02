@@ -687,6 +687,7 @@ fn render_tile_fetch_progress(ui: &Ui) {
     }
 }
 
+#[cfg(windows)]
 pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, log_path: &std::path::PathBuf) {
     render_tile_fetch_progress(ui);
     // Drain a couple of pending tile uploads per frame.

@@ -1,6 +1,8 @@
 //! ImGui overlay rendering for axipulse. Windows-only submodules are
 //! gated on `cfg(windows)` because `arcdps::imgui` ships Windows-only.
-//! Pure-logic modules (e.g. `map`) are always compiled for host tests.
+//! `map` compiles on the host too: its pure playback math (lerp,
+//! status/health sampling) is host-tested, so only its render items
+//! carry per-item `#[cfg(windows)]` gates.
 
 pub mod map;
 
