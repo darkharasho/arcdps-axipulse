@@ -62,6 +62,26 @@ jobs:
               lines.pop(0)
           notes = '\n'.join(lines).strip()
 
+          # Unwrap hard-wrapped paragraphs: RELEASE_NOTES.md is wrapped at
+          # ~72 cols but Discord renders newlines literally. A line that
+          # starts new structure (heading, list item, blockquote, NOTE:,
+          # numbered item, or blank) stands alone; anything else is a
+          # continuation and joins the previous line — including wrapped
+          # bullet text, which joins its bullet.
+          def starts_structure(line):
+              s = line.lstrip()
+              return (not s or s.startswith(('#', '- ', '* ', '>', 'NOTE:'))
+                      or (s.split('.', 1)[0].isdigit() and '.' in s))
+
+          unwrapped = []
+          for line in notes.splitlines():
+              if (unwrapped and not starts_structure(line)
+                      and unwrapped[-1].strip() and not unwrapped[-1].lstrip().startswith('#')):
+                  unwrapped[-1] = unwrapped[-1].rstrip() + ' ' + line.strip()
+              else:
+                  unwrapped.append(line)
+          notes = '\n'.join(unwrapped)
+
           if len(notes) > 3800:
               notes = notes[:3800] + '\n\n*... see full notes on GitHub*'
 
