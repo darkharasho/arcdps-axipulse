@@ -8,6 +8,10 @@ crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(windows)'.dependencies]
 arcdps = { path = "vendor/arcdps", features = ["extras", "log"] }
+# Private per-thread heaps. The default System allocator is HeapAlloc
+# on the shared process heap; parse-time alloc bursts contend its lock
+# with the game's render thread under Wine and cause a visible hitch.
+mimalloc = { version = "0.1", default-features = false }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",

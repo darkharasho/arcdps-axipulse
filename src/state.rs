@@ -31,14 +31,21 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self { Self::default() }
 
-    pub fn push_fight(&mut self, record: FightRecord) {
+    /// Returns any records evicted from history. Dropping a full
+    /// FightRecord frees a large allocation tree — callers should let
+    /// the return value drop *after* releasing the state lock so the
+    /// render thread never waits on the free.
+    #[must_use]
+    pub fn push_fight(&mut self, record: FightRecord) -> Vec<FightRecord> {
+        let mut evicted = Vec::new();
         if let Some(prev) = self.current.take() {
             self.history.push_back(prev);
             while self.history.len() > HISTORY_CAP {
-                self.history.pop_front();
+                evicted.extend(self.history.pop_front());
             }
         }
         self.current = Some(record);
+        evicted
     }
 
     pub fn current(&self) -> Option<&FightRecord> { self.current.as_ref() }

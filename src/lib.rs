@@ -1,5 +1,11 @@
 //! arcdps_axipulse: post-fight personal performance overlay.
 
+// Keep the plugin's allocations off the shared process heap (see
+// Cargo.toml note on mimalloc); its lock is contended by the game.
+#[cfg(windows)]
+#[global_allocator]
+static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod boon_uptime;
 pub mod config;
 pub mod derived;

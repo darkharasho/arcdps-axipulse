@@ -356,7 +356,12 @@ fn on_new_log(path: PathBuf) {
                 .filter(|t| t.enemy_player)
                 .count() as u32;
             let toast = ParsedToast { map, allies, enemies };
-            if let Ok(mut s) = G.state.lock() { s.push_fight(record); }
+            let evicted = match G.state.lock() {
+                Ok(mut s) => s.push_fight(record),
+                Err(_) => Vec::new(),
+            };
+            // Free the evicted fight's JSON here, outside the lock.
+            drop(evicted);
             if let Ok(mut g) = LAST_PARSED.lock() {
                 *g = Some((toast, std::time::Instant::now()));
             }
