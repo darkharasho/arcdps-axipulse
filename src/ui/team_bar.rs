@@ -20,10 +20,17 @@ const BAR_WIDTH: f32 = 264.0;
 const BAR_HEIGHT: f32 = 20.0;
 /// Gap between segments; the dark track shows through.
 const SEG_GAP: f32 = 2.0;
+/// Corner rounding on the bar's outer ends. Softer than a full pill:
+/// full-pill rounding turns near-empty segments into misshapen nubs.
+const BAR_ROUNDING: f32 = 7.0;
+/// Floor on segment width so a 1-player team stays a legible pip
+/// instead of a 2px sliver.
+const MIN_SEG_WIDTH: f32 = 14.0;
 const GLOW_HEIGHT: f32 = 3.0;
 const GLOW_GAP: f32 = 3.0;
 
 const TRACK_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
+const BAR_OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 const SEG_TEXT: [f32; 4] = [0.03, 0.04, 0.06, 0.85];
 const HEADER_DIM: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
 const HEADER_MID: [f32; 4] = [1.0, 1.0, 1.0, 0.55];
@@ -156,12 +163,21 @@ fn visible_segments(counts: TeamCounts) -> Vec<(TeamColor, u32)> {
     .collect()
 }
 
+/// Blend `c` toward white by `f`.
+fn lighten(c: [f32; 4], f: f32) -> [f32; 4] {
+    [c[0] + (1.0 - c[0]) * f, c[1] + (1.0 - c[1]) * f, c[2] + (1.0 - c[2]) * f, c[3]]
+}
+
+/// Blend `c` toward black by `f`.
+fn darken(c: [f32; 4], f: f32) -> [f32; 4] {
+    [c[0] * (1.0 - f), c[1] * (1.0 - f), c[2] * (1.0 - f), c[3]]
+}
+
 fn draw_bar(ui: &Ui, counts: TeamCounts, compact: bool) {
     let total = counts.total() as f32;
     let segments = visible_segments(counts);
     let gaps = SEG_GAP * (segments.len().saturating_sub(1)) as f32;
     let usable = BAR_WIDTH - gaps;
-    let pill = BAR_HEIGHT * 0.5;
 
     let origin = ui.cursor_screen_pos();
     let draw = ui.get_window_draw_list();
@@ -171,56 +187,95 @@ fn draw_bar(ui: &Ui, counts: TeamCounts, compact: bool) {
     // Recessed track behind the segments; shows through the gaps.
     draw.add_rect([origin[0], y0], [origin[0] + BAR_WIDTH, y1], TRACK_BG)
         .filled(true)
-        .rounding(pill)
+        .rounding(BAR_ROUNDING)
         .build();
+
+    // Proportional widths with a per-segment floor wide enough for the
+    // count label, so every segment always shows its count. The deficit
+    // from floored segments is taken from the flexible ones pro rata.
+    let labels: Vec<String> = segments.iter().map(|(_, c)| c.to_string()).collect();
+    let raw: Vec<f32> = segments
+        .iter()
+        .map(|(_, c)| usable * (*c as f32 / total))
+        .collect();
+    let mins: Vec<f32> = labels
+        .iter()
+        .map(|l| (ui.calc_text_size(l)[0] + 8.0).max(MIN_SEG_WIDTH))
+        .collect();
+    let mut deficit = 0.0;
+    let mut flexible = 0.0;
+    for (w, m) in raw.iter().zip(&mins) {
+        if w < m { deficit += m - w; } else { flexible += w; }
+    }
+    let widths: Vec<f32> = raw
+        .iter()
+        .zip(&mins)
+        .map(|(w, m)| {
+            if *w < *m { *m } else if flexible > 0.0 { w - (w / flexible) * deficit } else { *w }
+        })
+        .collect();
 
     let mut x = origin[0];
     let last = segments.len() - 1;
     let mut glow_spans: Vec<(f32, f32, TeamColor)> = Vec::with_capacity(segments.len());
-    for (i, (color, count)) in segments.iter().copied().enumerate() {
-        let w = usable * (count as f32 / total);
+    for (i, (color, _count)) in segments.iter().copied().enumerate() {
+        let w = widths[i];
         let (x0, x1) = (x, x + w);
         let (first, is_last) = (i == 0, i == last);
+        // Middle segments must use zero rounding rather than clearing
+        // all four corner flags: imgui promotes an empty corner mask
+        // back to RoundCornersAll, which would round their edges.
+        let rounding = if first || is_last { BAR_ROUNDING.min(w * 0.5) } else { 0.0 };
 
-        draw.add_rect([x0, y0], [x1, y1], color.rgba())
+        // Base fill, then a full-height gradient overlay: light at the
+        // top fading through the base color to a shaded bottom. The
+        // overlay is a plain quad, so inset it past the rounded corners
+        // and let the base fill own the corner arcs.
+        let base = color.rgba();
+        draw.add_rect([x0, y0], [x1, y1], base)
             .filled(true)
-            .rounding(pill)
+            .rounding(rounding)
             .round_top_left(first)
             .round_bot_left(first)
             .round_top_right(is_last)
             .round_bot_right(is_last)
             .build();
-        // Top-light gloss and a bottom shade line, clipped to the same
-        // outer-corner rounding so the pill silhouette stays clean.
-        draw.add_rect([x0, y0], [x1, y0 + BAR_HEIGHT * 0.45], [1.0, 1.0, 1.0, 0.16])
-            .filled(true)
-            .rounding(pill)
-            .round_top_left(first)
-            .round_top_right(is_last)
-            .round_bot_left(false)
-            .round_bot_right(false)
-            .build();
-        draw.add_rect([x0, y1 - BAR_HEIGHT * 0.22], [x1, y1], [0.0, 0.0, 0.0, 0.10])
-            .filled(true)
-            .rounding(pill)
-            .round_top_left(false)
-            .round_top_right(false)
-            .round_bot_left(first)
-            .round_bot_right(is_last)
-            .build();
-
-        // Count label centered in the segment, if it fits.
-        let label = count.to_string();
-        let ts = ui.calc_text_size(&label);
-        if ts[0] + 6.0 <= w {
-            let tx = x0 + (w - ts[0]) * 0.5;
-            let ty = y0 + (BAR_HEIGHT - ts[1]) * 0.5;
-            draw.add_text([tx, ty], SEG_TEXT, &label);
+        let gx0 = if first { x0 + rounding } else { x0 };
+        let gx1 = if is_last { x1 - rounding } else { x1 };
+        if gx1 > gx0 {
+            let mid = y0 + BAR_HEIGHT * 0.55;
+            let top = lighten(base, 0.22);
+            let bot = darken(base, 0.14);
+            draw.add_rect_filled_multicolor([gx0, y0], [gx1, mid], top, top, base, base);
+            draw.add_rect_filled_multicolor([gx0, mid], [gx1, y1], base, base, bot, bot);
+            // 1px inner top highlight.
+            draw.add_line([gx0 + 1.0, y0 + 1.0], [gx1 - 1.0, y0 + 1.0], [1.0, 1.0, 1.0, 0.28])
+                .build();
         }
+
+        // Count label centered in the segment; the width floor above
+        // guarantees it fits. Faint light offset underneath gives the
+        // dark text a crisper edge on the bright fill.
+        let label = &labels[i];
+        let ts = ui.calc_text_size(label);
+        let tx = x0 + (w - ts[0]) * 0.5;
+        let ty = y0 + (BAR_HEIGHT - ts[1]) * 0.5;
+        draw.add_text([tx, ty + 1.0], [1.0, 1.0, 1.0, 0.25], label);
+        draw.add_text([tx, ty], SEG_TEXT, label);
 
         glow_spans.push((x0, x1, color));
         x = x1 + SEG_GAP;
     }
+
+    // Crisp dark outline around the whole bar, over the segments.
+    draw.add_rect(
+        [origin[0] - 0.5, y0 - 0.5],
+        [origin[0] + BAR_WIDTH + 0.5, y1 + 0.5],
+        BAR_OUTLINE,
+    )
+    .rounding(BAR_ROUNDING)
+    .thickness(1.0)
+    .build();
 
     let mut height = BAR_HEIGHT;
     if !compact {
