@@ -1,21 +1,27 @@
 # Release Notes
 
-Version v0.3.2 — July 9, 2026
+Version v0.3.3 — July 27, 2026
 
-## No more stutter when a log finishes parsing
+## No more post-fight lag
 
-Fixed the split-second game hang when a new log landed. The plugin now
-uses its own memory allocator instead of sharing the game's, so
-crunching a big fight in the background can't stall the render thread
-anymore.
+The severe lag right after a fight while the log parses is gone. It turned
+out the parse was hungry enough on memory to make the whole system choke —
+the game itself was getting pushed out of RAM for several seconds. Parsing
+is now strictly memory-bounded end to end, and in testing you can't tell a
+parse is happening at all.
 
-## Team bar cleanup
+## Long sessions no longer get worse
 
-The team count bar got a proper polish pass:
+Every parsed fight used to stay in memory at full size, so a long WvW night
+made the game fatter (and the lag nastier) with every fight. Parsed fights
+are now stripped down to just what the overlays actually read — same stats,
+a fraction of the memory — and the footprint stays flat no matter how long
+you play.
 
-- Every team now always shows its player count — tiny teams used to
-  render as an unreadable sliver with no number.
-- Smooth gradient fills and a crisp outline replace the old flat look
-  with its hard gloss edge.
-- Fixed segments in the middle of the bar drawing rounded corners
-  where they should be square.
+NOTE: The fight history dropdown now keeps the last 8 fights instead of 32.
+
+## Giant fights still parse
+
+Truly massive logs (multi-blob three-way zerg fights) get one bounded parse
+attempt first, and automatically retry with the limits off if they're too
+big for it. Slightly slower for those monsters, but they won't be dropped.
