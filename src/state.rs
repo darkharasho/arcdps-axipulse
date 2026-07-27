@@ -9,7 +9,12 @@ use std::time::SystemTime;
 use crate::derived::Derived;
 use crate::ei_model::EiJson;
 
-const HISTORY_CAP: usize = 32;
+// Each retained fight costs real memory inside the game process
+// (~15-25 MB slimmed, measured on a 55-player WvW log; ~78 MB before
+// slimming). 32 slots let a long session pin gigabytes and drove the
+// box into parse-time swap storms; 8 bounds the worst case around
+// ~200 MB while still covering "compare the last few fights".
+const HISTORY_CAP: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct FightRecord {

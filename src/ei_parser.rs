@@ -26,6 +26,12 @@ const IDLE_PRIORITY_CLASS: u32 = 0x0000_0040;
 /// EI takes a little longer but the game never hitches.
 const EI_CORES: u32 = 2;
 
+/// GC heap hard limit for the first (capped) EI attempt, hex bytes.
+/// Typical WvW fights peak well under 1 GiB total; the biggest log on
+/// record needed ~2 GiB uncapped and gets there via the one-shot
+/// uncapped retry in `parse_log`. 0x60000000 = 1.5 GiB.
+const EI_HEAP_CAP: &str = "0x60000000";
+
 use crate::ei_bundle::{dotnet_root, ei_cli_exe};
 use crate::ei_model::EiJson;
 use crate::ei_settings::{generate_ei_conf, EiSettings};
@@ -35,7 +41,10 @@ pub enum ParseError {
     SettingsWrite(std::io::Error),
     SubprocessSpawn(std::io::Error),
     SubprocessExit { code: Option<i32>, stderr: String },
-    NoJsonOutput,
+    /// EI exited "successfully" but produced no .json.gz. EI catches
+    /// its own parse exceptions and exits 0, so the interesting detail
+    /// is whatever it printed — carried here for the log.
+    NoJsonOutput { ei_output: String },
     ReadOutput(std::io::Error),
     Gunzip(std::io::Error),
     Deserialise(serde_json::Error),
@@ -48,7 +57,8 @@ impl std::fmt::Display for ParseError {
             Self::SubprocessSpawn(e) => write!(f, "spawning EI CLI: {e}"),
             Self::SubprocessExit { code, stderr } =>
                 write!(f, "EI CLI exited code={code:?}; stderr={stderr}"),
-            Self::NoJsonOutput       => write!(f, "EI produced no .json.gz output"),
+            Self::NoJsonOutput { ei_output } =>
+                write!(f, "EI produced no .json.gz output; EI said: {ei_output}"),
             Self::ReadOutput(e)      => write!(f, "reading EI JSON output: {e}"),
             Self::Gunzip(e)          => write!(f, "gunzip EI output: {e}"),
             Self::Deserialise(e)     => write!(f, "deserialising EI JSON: {e}"),
@@ -79,8 +89,83 @@ pub fn parse_log(
 
     let exe = ei_cli_exe(install_root);
     let dotnet = dotnet_root(install_root);
-    let mut cmd = Command::new(&exe);
-    cmd.arg("-c").arg(&conf_path)
+
+    // First attempt runs with the GC heap capped at EI_HEAP_CAP — the
+    // overwhelming majority of logs fit, and staying bounded is what
+    // keeps the parse from shoving the game into swap on a tight box.
+    // EI swallows its own OutOfMemoryException, prints "Parsing
+    // Failure … OutOfMemoryException" and exits 0 with *no* output
+    // file, so a log that genuinely needs more than the cap surfaces
+    // as no-gz + OOM text. Retry those once uncapped (~2 GiB observed
+    // on the largest log to date): rare, and strictly better than
+    // losing the fight.
+    let mut output = run_ei(&exe, &dotnet, &conf_path, log_path, true)?;
+    if find_json_gz(&work.0).is_none() && mentions_oom(&output) {
+        log::warn!(
+            "axipulse: EI hit the {EI_HEAP_CAP}-byte GC heap cap on {log_path:?}; retrying uncapped"
+        );
+        output = run_ei(&exe, &dotnet, &conf_path, log_path, false)?;
+    }
+    if !output.status.success() {
+        return Err(ParseError::SubprocessExit {
+            code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+
+    let json_gz = find_json_gz(&work.0)
+        .ok_or_else(|| ParseError::NoJsonOutput { ei_output: output_tail(&output) })?;
+
+    let bytes = fs::read(&json_gz).map_err(ParseError::ReadOutput)?;
+    // Size the output buffer from the gzip ISIZE trailer instead of a
+    // ratio guess. EI JSON compresses ~16x, so the old `len * 4` guess
+    // forced read_to_end into doubling reallocs — for a 129 MB payload
+    // that meant a ~250 MB final buffer plus ~200 MB of memcpy churn,
+    // all inside the game process on a memory-tight box. Exact sizing
+    // makes the peak equal the payload and eliminates the reallocs
+    // (std's read_to_end probes EOF on a 32-byte stack buffer, so an
+    // exactly-sized Vec never grows).
+    let cap = gzip_isize(&bytes)
+        .filter(|&n| n <= 1_500_000_000)
+        .unwrap_or(bytes.len().saturating_mul(4));
+    let mut decompressed = Vec::with_capacity(cap);
+    {
+        let mut gz = flate2::read::GzDecoder::new(&bytes[..]);
+        gz.read_to_end(&mut decompressed).map_err(ParseError::Gunzip)?;
+    }
+    // The compressed copy is dead weight during deserialisation.
+    drop(bytes);
+
+    serde_json::from_slice(&decompressed).map_err(ParseError::Deserialise)
+}
+
+/// Uncompressed size a single-member gzip stream claims in its ISIZE
+/// trailer (last 4 bytes, little-endian, size mod 2³²). `None` when the
+/// buffer is too short to be gzip or the trailer reads zero. EI writes
+/// single-member streams well under 4 GiB, so this is exact for us;
+/// callers must still treat it as a hint and clamp against absurd
+/// values from a corrupt trailer.
+pub fn gzip_isize(gz: &[u8]) -> Option<usize> {
+    if gz.len() < 18 {
+        return None;
+    }
+    let t = &gz[gz.len() - 4..];
+    let n = u32::from_le_bytes([t[0], t[1], t[2], t[3]]) as usize;
+    (n > 0).then_some(n)
+}
+
+/// Spawn the EI CLI on `log_path` and wait for it (10-minute cap).
+/// `cap_heap` gates the GC hard limit for the capped-then-retry flow
+/// in `parse_log`.
+fn run_ei(
+    exe: &Path,
+    dotnet: &Path,
+    conf_path: &Path,
+    log_path: &Path,
+    cap_heap: bool,
+) -> Result<std::process::Output, ParseError> {
+    let mut cmd = Command::new(exe);
+    cmd.arg("-c").arg(conf_path)
         .arg(log_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -88,7 +173,7 @@ pub fn parse_log(
     // Point EI's apphost at our bundled .NET 8 instead of relying on the
     // Wine prefix to have a system runtime installed.
     if dotnet.join("dotnet.exe").exists() {
-        cmd.env("DOTNET_ROOT", &dotnet);
+        cmd.env("DOTNET_ROOT", dotnet);
     }
     // Tame the .NET cold-start burst that freezes GW2's render thread under
     // Wine. IDLE_PRIORITY_CLASS only throttles CPU *scheduling*; it does
@@ -111,43 +196,62 @@ pub fn parse_log(
     // to match instead of spawning a per-logical-CPU thread burst
     // through the single-threaded wineserver.
     cmd.env("DOTNET_PROCESSOR_COUNT", EI_CORES.to_string());
+    // Bound EI's memory, not just its CPU. Live monitoring showed the
+    // post-fight lag was a system-wide zram swap storm: the box runs
+    // <1 GB free while the game plays, and the parse-time demand burst
+    // tipped the kernel into swapping the game's own pages out (severe
+    // multi-second stall). Conserve-memory stays on for both attempts;
+    // the hard limit only on the first (see parse_log).
+    if cap_heap {
+        cmd.env("DOTNET_GCHeapHardLimit", EI_HEAP_CAP);
+    }
+    // Trade GC CPU for a smaller resident heap (0-9, higher = more
+    // aggressive). The subprocess is affinity-confined anyway.
+    cmd.env("DOTNET_GCConserveMemory", "7");
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS);
     let mut child = cmd.spawn().map_err(ParseError::SubprocessSpawn)?;
     #[cfg(windows)]
     confine_child_to_cores(&child, EI_CORES);
 
-    let timeout = Duration::from_secs(600);
-    let output = match wait_with_timeout(&mut child, timeout) {
-        Some(o) => o,
+    match wait_with_timeout(&mut child, Duration::from_secs(600)) {
+        Some(o) => Ok(o),
         None => {
             let _ = child.kill();
-            return Err(ParseError::SubprocessExit {
+            Err(ParseError::SubprocessExit {
                 code: None,
                 stderr: "EI parse timed out after 10 minutes".to_string(),
-            });
+            })
         }
-    };
-    if !output.status.success() {
-        return Err(ParseError::SubprocessExit {
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
     }
+}
 
-    let json_gz = fs::read_dir(&work.0)
-        .map_err(ParseError::ReadOutput)?
+fn find_json_gz(work_dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(work_dir)
+        .ok()?
         .flatten()
         .map(|e| e.path())
         .find(|p| p.extension().and_then(|e| e.to_str()) == Some("gz"))
-        .ok_or(ParseError::NoJsonOutput)?;
+}
 
-    let bytes = fs::read(&json_gz).map_err(ParseError::ReadOutput)?;
-    let mut gz = flate2::read::GzDecoder::new(&bytes[..]);
-    let mut decompressed = Vec::with_capacity(bytes.len() * 4);
-    gz.read_to_end(&mut decompressed).map_err(ParseError::Gunzip)?;
+/// EI reported an OutOfMemoryException on either stream. Full scan —
+/// the streams are a few KB at most.
+fn mentions_oom(output: &std::process::Output) -> bool {
+    let has = |b: &[u8]| String::from_utf8_lossy(b).to_ascii_lowercase().contains("outofmemory");
+    has(&output.stdout) || has(&output.stderr)
+}
 
-    serde_json::from_slice(&decompressed).map_err(ParseError::Deserialise)
+/// Combined stdout+stderr, clipped to the last ~400 chars — enough to
+/// carry EI's "Parsing Failure - …: <reason>" line into arcdps.log.
+fn output_tail(output: &std::process::Output) -> String {
+    let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
+    s.push_str(&String::from_utf8_lossy(&output.stderr));
+    let s = s.trim();
+    let mut start = s.len().saturating_sub(400);
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
 }
 
 /// Pin `child` to the `n` highest available logical CPUs. Highest, not

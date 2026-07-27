@@ -330,9 +330,13 @@ fn on_new_log(path: PathBuf) {
     let settings = G.settings.lock().ok().map(|s| s.clone()).unwrap_or_default();
     log::warn!("axipulse: parsing {path:?}");
     match parse_log(&install_root, &settings, &path) {
-        Ok(json) => {
+        Ok(mut json) => {
             // Pre-compute everything heavy the UI used to do per frame.
             let derived = std::sync::Arc::new(crate::derived::Derived::compute(&json));
+            // Derived has consumed the heavy arrays; collapse what the
+            // per-frame accessors still read so the retained record
+            // stays small (see slim.rs — this is the post-fight-lag fix).
+            crate::slim::slim_after_derive(&mut json);
             let record = FightRecord {
                 log_path: path,
                 parsed_at: std::time::SystemTime::now(),

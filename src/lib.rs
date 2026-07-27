@@ -19,6 +19,7 @@ pub mod hotkey;
 pub mod map;
 pub mod pulse_metrics;
 pub mod self_identify;
+pub mod slim;
 pub mod squad_rank;
 pub mod state;
 pub mod timeline_boons;

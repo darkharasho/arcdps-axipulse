@@ -102,9 +102,10 @@ pub struct EiPlayer {
     /// Phases × seconds cumulative damage (2-D).
     #[serde(default, rename = "damage1S")]
     pub damage_1s: Vec<Vec<u64>>,
-    /// Targets × phases × seconds cumulative damage (3-D).
-    #[serde(default, rename = "targetDamage1S")]
-    pub target_damage_1s: Vec<Vec<Vec<u64>>>,
+    // NOTE: EI also emits `targetDamage1S` (targets × phases × seconds,
+    // ~10 MB of JSON per mid-size WvW fight). Nothing reads it — do not
+    // add it back without a consumer; deserialising it alone measurably
+    // bloats the retained fight tree.
     /// Phases × seconds cumulative damage taken (2-D).
     #[serde(default, rename = "damageTaken1S")]
     pub damage_taken_1s: Vec<Vec<u64>>,
