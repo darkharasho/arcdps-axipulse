@@ -150,19 +150,6 @@ fn draw_header(ui: &Ui, map: &str, total: u32) {
     ui.dummy([BAR_WIDTH, line_h + 4.0]);
 }
 
-/// Nonzero (color, count) segments in display order.
-fn visible_segments(counts: TeamCounts) -> Vec<(TeamColor, u32)> {
-    [
-        (TeamColor::Red, counts.red),
-        (TeamColor::Green, counts.green),
-        (TeamColor::Blue, counts.blue),
-        (TeamColor::Unknown, counts.unknown),
-    ]
-    .into_iter()
-    .filter(|(_, c)| *c > 0)
-    .collect()
-}
-
 /// Blend `c` toward white by `f`.
 fn lighten(c: [f32; 4], f: f32) -> [f32; 4] {
     [c[0] + (1.0 - c[0]) * f, c[1] + (1.0 - c[1]) * f, c[2] + (1.0 - c[2]) * f, c[3]]
@@ -175,7 +162,7 @@ fn darken(c: [f32; 4], f: f32) -> [f32; 4] {
 
 fn draw_bar(ui: &Ui, counts: TeamCounts, compact: bool) {
     let total = counts.total() as f32;
-    let segments = visible_segments(counts);
+    let segments = counts.segments();
     let gaps = SEG_GAP * (segments.len().saturating_sub(1)) as f32;
     let usable = BAR_WIDTH - gaps;
 
@@ -300,7 +287,7 @@ fn draw_legend(ui: &Ui, counts: TeamCounts, self_color: Option<TeamColor>) {
     const DOT_TEXT_GAP: f32 = 5.0;
     const ITEM_GAP: f32 = 12.0;
 
-    let segments = visible_segments(counts);
+    let segments = counts.segments();
     let items: Vec<(TeamColor, String, bool)> = segments
         .into_iter()
         .map(|(color, count)| {

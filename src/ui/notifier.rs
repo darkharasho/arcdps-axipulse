@@ -11,9 +11,6 @@ use crate::plugin::ParsedToast;
 /// How long the "Parsed: …" toast lingers after a parse completes.
 const PARSED_LINGER_SECS: f32 = 6.0;
 
-const ALLY_GREEN: [f32; 4] = [0.40, 0.92, 0.55, 1.0];
-const ENEMY_RED:  [f32; 4] = [1.00, 0.40, 0.40, 1.0];
-
 pub fn render(ui: &Ui, config: &mut Config) {
     if !config.show_notifications { return; }
 
@@ -63,12 +60,19 @@ pub fn render(ui: &Ui, config: &mut Config) {
             let alpha = (remain / 1.5).min(fade_in) * 0.75;
             let neutral = [0.97, 0.97, 1.0, 1.0];
             let mut segs: Vec<(String, [f32; 4])> = Vec::new();
+            // Per-team counts in the team bar's palette and order, so
+            // the toast never disagrees with the widget.
+            let teams = toast.counts.segments();
             if !toast.map.is_empty() {
-                segs.push((format!("{} \u{00b7} ", toast.map), neutral));
+                let sep = if teams.is_empty() { "" } else { " \u{00b7} " };
+                segs.push((format!("{}{}", toast.map, sep), neutral));
             }
-            segs.push((format!("{}", toast.allies), ALLY_GREEN));
-            segs.push((" v ".to_string(), neutral));
-            segs.push((format!("{}", toast.enemies), ENEMY_RED));
+            for (i, (color, count)) in teams.iter().enumerate() {
+                if i > 0 {
+                    segs.push((" v ".to_string(), neutral));
+                }
+                segs.push((count.to_string(), color.rgba()));
+            }
             (alpha, [0.50, 0.78, 1.0, 1.0], "Parsed", segs)
         }
         Msg::Placeholder => (

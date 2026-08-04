@@ -276,13 +276,13 @@ fn resolve_dll_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Snapshot the notifier renders for the "Parsed" toast. `map` is the
-/// stripped fight name (e.g. "Green Alpine Borderlands"); `allies` /
-/// `enemies` are coloured separately in the toast body.
+/// stripped fight name (e.g. "Green Alpine Borderlands"); `counts` is
+/// the same per-team breakdown the team bar shows, so the toast's
+/// numbers and colours always match it.
 #[derive(Clone)]
 pub struct ParsedToast {
     pub map: String,
-    pub allies: u32,
-    pub enemies: u32,
+    pub counts: crate::wvw_teams::TeamCounts,
 }
 
 /// Last successfully-parsed fight + when it landed. Drives the "Parsed: …"
@@ -355,11 +355,8 @@ fn on_new_log(path: PathBuf) {
                 .strip_prefix("Detailed WvW - ")
                 .unwrap_or(record.data.fight_name.as_str())
                 .to_string();
-            let allies = record.data.players.len() as u32;
-            let enemies = record.data.targets.iter()
-                .filter(|t| t.enemy_player)
-                .count() as u32;
-            let toast = ParsedToast { map, allies, enemies };
+            let counts = crate::wvw_teams::count_teams(&record.data);
+            let toast = ParsedToast { map, counts };
             let evicted = match G.state.lock() {
                 Ok(mut s) => s.push_fight(record),
                 Err(_) => Vec::new(),

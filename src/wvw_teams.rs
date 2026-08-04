@@ -79,6 +79,21 @@ impl TeamCounts {
     pub fn total(&self) -> u32 {
         self.red + self.green + self.blue + self.unknown
     }
+
+    /// Nonzero (color, count) pairs in display order. Shared by the
+    /// team bar and the notifier toast so both surfaces always agree
+    /// on ordering and (via `TeamColor::rgba`) on colors.
+    pub fn segments(&self) -> Vec<(TeamColor, u32)> {
+        [
+            (TeamColor::Red, self.red),
+            (TeamColor::Green, self.green),
+            (TeamColor::Blue, self.blue),
+            (TeamColor::Unknown, self.unknown),
+        ]
+        .into_iter()
+        .filter(|(_, c)| *c > 0)
+        .collect()
+    }
 }
 
 pub fn count_teams(json: &EiJson) -> TeamCounts {
@@ -135,6 +150,16 @@ mod tests {
         // red slot is 0 (team absent); a 0 team id must not become Red.
         let m = map(0, 39, 432);
         assert_eq!(team_color(Some(0), Some(&m)), TeamColor::Unknown);
+    }
+
+    #[test]
+    fn segments_keep_display_order_and_skip_zero_teams() {
+        let c = TeamCounts { red: 3, green: 0, blue: 7, unknown: 1 };
+        assert_eq!(
+            c.segments(),
+            vec![(TeamColor::Red, 3), (TeamColor::Blue, 7), (TeamColor::Unknown, 1)],
+        );
+        assert_eq!(TeamCounts::default().segments(), vec![]);
     }
 
     #[test]
