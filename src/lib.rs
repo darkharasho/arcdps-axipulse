@@ -15,6 +15,7 @@ pub mod ei_model;
 pub mod ei_parser;
 pub mod ei_settings;
 pub mod fight_composition;
+pub mod fight_data;
 pub mod hotkey;
 pub mod map;
 pub mod pulse_metrics;
