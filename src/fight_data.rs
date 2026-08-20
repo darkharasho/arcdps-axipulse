@@ -15,7 +15,7 @@
 #![allow(dead_code)] // Nothing wires this module up until migration Task 7.
 
 use axilog_api::v1::entities::Role;
-use axilog_api::v1::envelope::Coverage;
+use axilog_api::v1::envelope::{Coverage, CoverageState};
 use axilog_api::v1::ReportV1;
 use std::collections::HashMap;
 
@@ -48,6 +48,24 @@ pub struct FightData {
     /// later task that joins a `blocks.*` row (keyed by entity id) back
     /// onto a roster row doesn't have to re-derive it.
     entity_index: HashMap<u32, usize>,
+    /// Whether this LOG carries the arcdps healing addon extension, i.e.
+    /// whether `PlayerData::healing_out`/`barrier_out`/`downed_healing_out`
+    /// are real measurements rather than a zero standing in for "unknown".
+    ///
+    /// `false` exactly when `blocks.healing`'s own coverage state is
+    /// `Unsupported` -- axilog reports `blocks.healing` as `Some(..)`
+    /// unconditionally, even on a log recorded without the addon
+    /// (`axilog_schema::v1::mod::build_report`, and its doc comment at
+    /// `v1/mod.rs:224-235`: "a log with no healing extension reported
+    /// `healing: present` with zero rows"), so every player's healing
+    /// fields silently read 0 on such a log unless something upstream of
+    /// the UI can tell the two cases apart. This is that signal --
+    /// log-wide, not per-player, because the healing extension is a
+    /// property of the LOG (whoever was running the addon that reports
+    /// it), not of any one squad member. Wiring it into the UI (e.g.
+    /// rendering "--" instead of "0") is migration Task 7's job; this
+    /// task only populates the field.
+    pub healing_available: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +109,12 @@ pub struct PlayerData {
     pub cleanses_self: u32,
     pub resurrects: u32,
 
-    // -- Healing (blocks.healing.by_entity[id]) --
+    // -- Healing (blocks.healing.by_entity[id]) -- 0 when this player has
+    // no row (a measured zero, per the block-vs-row distinction in
+    // `require`'s doc comment) OR when `FightData::healing_available` is
+    // `false` (the log has no healing addon data at all, so these three
+    // fields are a placeholder zero, not a measurement -- callers must
+    // check `healing_available` before trusting them).
     pub healing_out: u64,
     pub barrier_out: u64,
     pub downed_healing_out: u64,
@@ -115,20 +138,30 @@ impl FightData {
         // These six blocks are all "always-on" per `axilog_schema::v1::mod::build_report`
         // (see its "Always-on blocks" comment) -- none of them ride a
         // `ParseOpts` gate, so under this codebase's fixed `PARSE_OPTS`
-        // (`tests/common/mod.rs::PARSE_OPTS`) they are computed
-        // unconditionally. `require` still panics rather than defaulting
-        // to zero if one is ever missing, because a missing block here
-        // would mean the native report changed shape under us, not that
-        // the fight had nothing to report -- that "nothing" case is
-        // already expressed by the block being PRESENT but its
-        // `by_entity` map lacking this entity's row (handled below by
-        // defaulting each field, not the whole block).
+        // (`tests/common/mod.rs::PARSE_OPTS`) none of them can read
+        // `not_computed`. `require` panics if one ever does (see its own
+        // doc comment) -- that would mean the native report's shape
+        // changed under us, not that the fight had nothing to report.
+        // "Nothing to report" is `Empty` (an always-on block computed and
+        // found nothing) or, for `healing` alone, `Unsupported` (this LOG
+        // has no addon data) -- neither is fatal; see `require` and
+        // `healing_available` below for how those two are told apart from
+        // a real absence.
         let damage = require(&r.blocks.damage, "damage", &r.coverage);
         let defenses = require(&r.blocks.defenses, "defenses", &r.coverage);
         let cc = require(&r.blocks.cc, "cc", &r.coverage);
         let support = require(&r.blocks.support, "support", &r.coverage);
         let healing = require(&r.blocks.healing, "healing", &r.coverage);
         let contribution = require(&r.blocks.contribution, "contribution", &r.coverage);
+        // Log-wide, not per-entity -- see `FightData::healing_available`'s
+        // doc comment. `NotComputed` is already fatal via the `require`
+        // call above (this crate's `PARSE_OPTS` never leaves a gate
+        // `healing` depends on off), so the only two states left here are
+        // `Unsupported` (no addon on this log -- not available) and
+        // `Present`/`Empty` (addon ran -- available, whether or not it
+        // measured anything).
+        let healing_available =
+            !matches!(r.coverage.get("healing"), Some(CoverageState::Unsupported));
 
         let mut players = Vec::new();
         let mut enemies = Vec::new();
@@ -231,25 +264,59 @@ impl FightData {
             players,
             enemies,
             entity_index,
+            healing_available,
         }
     }
 }
 
-/// Fetches a block this projection needs, panicking with the block's own
-/// coverage state when it is absent.
+/// Fetches a block this projection needs, panicking when its OWN
+/// coverage entry says `NotComputed`.
 ///
-/// A missing block here is never "the fight had nothing" -- that case is
-/// `Some(block)` with an empty `by_entity` map, which `Coverage::get`
-/// reports as `Empty` and which callers already treat as a measured zero
-/// per-entity. `None` means the block never ran at all (`NotComputed`,
-/// because a `ParseOpts` gate it depends on was off) or cannot run on this
-/// log (`Unsupported`) -- both are real absences this projection must not
-/// paper over by rendering a zero or falling back to Elite Insights.
+/// Gated on the coverage MAP ENTRY, not on `block.is_none()`. The two are
+/// not interchangeable: axilog's `blocks.healing` is `Some(..)`
+/// unconditionally (`axilog_schema::v1::mod::build_report`, `v1/mod.rs`
+/// around line 669), even when its coverage is `Unsupported` -- a log
+/// recorded without the arcdps healing addon, which is the common case.
+/// The block's own doc comment (`v1/mod.rs:224-235`) says as much: "a log
+/// with no healing extension reported `healing: present` with zero
+/// rows". A version of this function that only checked
+/// `Option::is_none()` would never fire for `healing` at all, and every
+/// player's healing fields would silently resolve to a plain `0` on an
+/// addon-less log -- exactly the "coverage says absent but we rendered a
+/// zero anyway" outcome this project forbids. Reading `coverage.get(name)`
+/// first is what lets `NotComputed` (fatal) and `Unsupported` (not
+/// fatal, see below) be told apart even when both pair with a `None`
+/// block on some hypothetical future block, and even though today only
+/// `healing` can be `Unsupported` at all.
+///
+/// Only `NotComputed` (and a name absent from `coverage` entirely, which
+/// should not be possible given `Coverage::new`'s `BlockName::ALL` seed)
+/// panics. Every block this projection reads is either always-on under
+/// this crate's fixed `PARSE_OPTS` (damage, defenses, cc, support,
+/// contribution -- see `axilog_schema::v1::mod::build_report`'s
+/// "Always-on blocks" comment) or, for `healing` alone, gated on a
+/// property of the LOG rather than of `ParseOpts` (whether the arcdps
+/// healing addon ran). Neither case can produce `NotComputed` under this
+/// crate's parse options, so seeing it here means a real regression: a
+/// `ParseOpts` gate this projection depends on got left off. `Empty`
+/// (block ran, found nothing) and `Unsupported` (this log cannot produce
+/// the block at all) are NOT fatal -- both still carry a real `Some`
+/// block whose `by_entity` map a caller reads as a measured zero per
+/// row; `Unsupported` additionally needs a way to tell "zero" from
+/// "unknown" apart, which is what `FightData::healing_available` is for
+/// (derived the same way, straight from `coverage.get("healing")`,
+/// rather than folded into this function's boolean return).
 fn require<'a, T>(block: &'a Option<T>, name: &str, coverage: &Coverage) -> &'a T {
+    let state = coverage.get(name);
+    assert!(
+        !matches!(state, Some(CoverageState::NotComputed) | None),
+        "axilog report's \"{name}\" block is not_computed under this crate's PARSE_OPTS -- \
+         a parse gate this projection depends on must have been left off (coverage: {state:?})",
+    );
     block.as_ref().unwrap_or_else(|| {
         panic!(
-            "axilog report is missing the \"{name}\" block (coverage: {:?})",
-            coverage.get(name),
+            "axilog report's \"{name}\" block is absent despite coverage {state:?} -- \
+             the native report's shape no longer matches this projection's assumptions",
         )
     })
 }
