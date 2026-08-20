@@ -75,53 +75,56 @@ fn summed_quantities_match_the_ei_oracle_within_one_percent() {
     }
 }
 
+// `down_contribution` is NOT compared against EI below -- axilog
+// docs/EI-PARITY.md:50 states that the M11 contribution family
+// (`downs_contribution`/`downed_by`) implements the dev-relayed arcdps
+// health-anchored-window methodology ("max(last-≥99%-health - 2000ms,
+// log start, prev-down + 2100ms reset)", four stats, both directions) and
+// says outright: "EI has no equivalent surface -- this follows arcdps
+// itself, not EI." The migration spec's Accepted Risks name down
+// contribution specifically as a number that moves. An EI-relative
+// tolerance here -- 1%, or a wider ratio band -- asserts almost nothing
+// while encoding the false claim that the two quantities should be near
+// each other. Measured against this fixture: `native.down_contribution >=
+// ei_down_contribution` did NOT hold for all 46 squad members (6
+// counterexamples, e.g. Anon178.7586: native=450 < ei=588), so no
+// directional relationship is asserted either. Do not restore an EI
+// comparison here without first re-deriving why the two should agree.
 #[test]
-fn down_contribution_diverges_from_ei_by_a_bounded_ratio() {
-    // The brief's original assertion here was
-    // `p.down_contribution <= ei_total * 1.01` -- i.e. native's damage
-    // slice of the arcdps M11 contribution family should sit at or under
-    // EI's single `downContribution` number. That does NOT hold against
-    // this fixture: axilog's own schema doc comment on
-    // `ContributionEntity` (crates/axilog-schema/src/v1/blocks/support.rs)
-    // says plainly "GW2EI has no equivalent surface -- this follows
-    // arcdps itself, not EI" (also documented in axilog's EI-PARITY.md).
-    // The two numbers come from genuinely different window methodologies
-    // (arcdps's health-anchored window vs. EI's own), not from a
-    // reprojection bug here.
-    //
-    // Measured against this fixture with a throwaway diagnostic harness:
-    // of the 46 squad members, only 11 (24%) land within the brief's 1%
-    // band or agree on zero; the rest run higher, up to 7.0x EI's number
-    // (Anon163.7031: native=11800, ei=1687); 3 players have EI==0 but a
-    // positive native number (native's window can credit a down EI's
-    // window structurally could not see). This is a real, much larger
-    // divergence than the two the task-3 brief names (downs_taken, blank
-    // elite specs) -- flagged in the task-3 report as a concern rather
-    // than silently swallowed.
-    //
-    // What's left assertable without pretending the two numbers are the
-    // same slice: native is a u64 (trivially non-negative), and it does
-    // not run away arbitrarily far from EI's number when EI reports a
-    // nonzero contribution. 10x gives headroom over the measured 7.0x
-    // worst case while still catching a real regression (e.g. native
-    // reporting 100x EI, or double-counting a skill).
+fn down_contribution_is_populated_and_covered() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
+
+    // 1. `blocks.contribution`'s coverage must not read `not_computed`
+    // (or any other non-`Present` state) -- that is a hard error in this
+    // project, never a silent zero.
+    assert_eq!(
+        n.coverage.get("contribution"),
+        Some(axilog_api::v1::envelope::CoverageState::Present),
+        "the contribution block must be present under this fixture's PARSE_OPTS",
+    );
+
+    // 2. The field is actually populated, not a column of structural
+    // zeros. The strongest true invariant measured against this fixture:
+    // every squad player credited with a down or a kill (`downs_dealt >
+    // 0 || kills_dealt > 0`) has a nonzero `down_contribution` (28/28, no
+    // counterexamples). A broader "every player who dealt ANY damage has
+    // down_contribution > 0" does NOT hold -- 2 of 45 damage-dealing
+    // squad members (e.g. Anon151.6587, damage=1471) have
+    // down_contribution == 0, which makes sense once `down_contribution`
+    // is understood as credit for damage landed inside a down's own
+    // anchored window, not overall damage dealt: a player can deal
+    // damage that never lands within any enemy's down window.
+    let mut any_nonzero = false;
     for p in f.players.iter().filter(|p| p.in_squad) {
-        let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
-        let ei_contribution = ep.stats_all[0].down_contribution;
-        if ei_contribution == 0 {
-            continue;
+        any_nonzero |= p.down_contribution > 0;
+        if p.downs_dealt > 0 || p.kills_dealt > 0 {
+            assert!(
+                p.down_contribution > 0,
+                "{} landed a down/kill but down_contribution is 0",
+                p.account,
+            );
         }
-        let ratio = p.down_contribution as f64 / ei_contribution as f64;
-        assert!(
-            ratio < 10.0,
-            "{} down contribution ratio {:.2}x exceeded the measured bound (native={}, ei={})",
-            p.account,
-            ratio,
-            p.down_contribution,
-            ei_contribution,
-        );
     }
+    assert!(any_nonzero, "down_contribution is uniformly zero across the whole squad");
 }
