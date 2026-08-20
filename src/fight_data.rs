@@ -50,6 +50,19 @@ pub struct FightData {
     /// later task that joins a `blocks.*` row (keyed by entity id) back
     /// onto a roster row doesn't have to re-derive it.
     entity_index: HashMap<u32, usize>,
+    /// The WvW map's fixed world rect and arena image --
+    /// `blocks.replay.tracks.arena`. `None` for a map axilog has no
+    /// hand-authored arena image for (`ArenaOut::for_map_id`'s own doc
+    /// comment), OR when `--replay` did not run at all (`tracks` itself is
+    /// `None` then) -- this projection does not distinguish the two,
+    /// because neither leaves anything to project `PlayerData::positions`
+    /// onto. `ui/map.rs`'s job (migration Task 7) is to project a raw
+    /// world position onto this rect's image pixel space:
+    /// `px = (x - world_min_x) / (world_max_x - world_min_x) * image_width`,
+    /// `py = (1 - (y - world_min_y) / (world_max_y - world_min_y)) *
+    /// image_height` -- world y grows northward, image y grows downward,
+    /// hence the flip.
+    pub arena: Option<Arena>,
     /// Whether this LOG carries the arcdps healing addon extension, i.e.
     /// whether `PlayerData::healing_out`/`barrier_out`/`downed_healing_out`
     /// are real measurements rather than a zero standing in for "unknown".
@@ -191,6 +204,119 @@ pub struct PlayerData {
     /// spare `Option` to carry the difference through and no consumer
     /// this task knows of needs it).
     pub health_percents: Vec<(u64, f64)>,
+
+    // -- Replay (blocks.replay) --
+    /// `blocks.replay.tracks.by_entity[id].samples`, timestamp dropped and
+    /// `(x, y)` narrowed to `f32` -- RAW WORLD INCHES, not pixels or any
+    /// other projected unit. Converting to a map pixel is the UI's job
+    /// (see [`FightData::arena`]'s doc comment for the formula), not
+    /// this projection's. Empty when `--replay` did not run (`tracks` is
+    /// `None`) or when this player has no track row at all -- the same
+    /// "measured absence" convention every other by-entity lookup in this
+    /// module follows; there is no coverage signal narrower than
+    /// `blocks.replay.tracks.is_some()` to distinguish those two cases
+    /// from each other, and neither leaves any samples to report.
+    ///
+    /// **Does NOT have a uniform length across players.** A track starts
+    /// at this player's own first-aware time rounded up to the shared
+    /// polling grid (`blocks.replay.tracks.poll_ms`) and ends at their
+    /// last-aware time -- both genuinely per-player, not a shared window.
+    /// Measured against this crate's fixture (47 squad members,
+    /// `poll_ms == 300`): 39/47 share the modal length (461 samples,
+    /// i.e. present for the whole ~138s encounter), 7 more sit 1-9
+    /// samples short (453-460 -- late join / early leave / a gap in
+    /// position telemetry), and one sits far short at 254 (a player who
+    /// was only tracked for roughly the back half of the fight). "First/
+    /// last aware" is an event-presence fact, not a fixed start/end pair,
+    /// so this spread is expected, not a bug. What IS uniform is the
+    /// GRID: every sample's own timestamp (not carried here, see above)
+    /// is an exact multiple of `poll_ms` -- verified against this fixture
+    /// for every returned track.
+    pub positions: Vec<(f32, f32)>,
+    /// `blocks.replay.by_entity[id].down` -- half-open
+    /// `[start_ms, end_ms)` down-state windows, log-relative ms. Always
+    /// on (Task 11's always-on half of the replay block), unlike
+    /// `positions` above.
+    pub down_ranges: Vec<(u64, u64)>,
+    /// `blocks.replay.by_entity[id].dead`, same shape/gate as
+    /// `down_ranges`.
+    pub dead_ranges: Vec<(u64, u64)>,
+    /// `blocks.replay.by_entity[id].dc` -- disconnect/not-yet-spawned
+    /// windows. Same shape/gate as `down_ranges`; not mutually exclusive
+    /// with it or `dead_ranges` (an agent can despawn while dead).
+    pub dc_ranges: Vec<(u64, u64)>,
+    /// `blocks.replay.by_entity[id].active_ms` -- `(end_ms - start_ms) -
+    /// dead_ms`. NOT `- down_ms` too, despite the tempting reading of
+    /// "active" -- down time counts as active, only dead time does not.
+    /// 0 when this player has no replay row at all.
+    pub active_ms: u64,
+    /// `blocks.replay.by_entity[id].dist_to_com`, EI's `distToCom` --
+    /// mean distance to the commander over this player's active polls, in
+    /// world inches.
+    ///
+    /// **Tri-state on the native side, collapsed to two here on purpose.**
+    /// Native's `Option<f64>` is `None` when `--replay` never ran (nothing
+    /// measured) and `Some(-1.0)` when it ran but this actor had no poll
+    /// that paired with a commander reference (EI's own sentinel, see
+    /// `axilog_core::analysis::distance::NO_DISTANCE`) -- both distinct
+    /// from `Some(x >= 0.0)`, a real measured distance. This field folds
+    /// the first two into one `None`: nothing downstream of this
+    /// projection needs to tell "we never looked" from "we looked and
+    /// this player was never near a commander" apart, and a consumer that
+    /// mapped absence to `-1.0` (or vice versa) would risk rendering the
+    /// sentinel as a real distance, which is exactly the bug this
+    /// projection exists to prevent. **A `-1.0` must never reach this
+    /// field as `Some`.**
+    pub dist_to_com: Option<f32>,
+    /// `blocks.rotation.by_entity[id].casts`, already flat and sorted by
+    /// `(cast_time_ms, skill_id)` on the native side
+    /// (`axilog_schema::v1::blocks::activity::build_rotation`) -- this
+    /// projection does not re-sort. Empty when `--rotation` did not run
+    /// (the native field is `None`, the gate `RotationEntity::casts`'s own
+    /// doc comment describes) or when this player cast nothing; per that
+    /// same doc comment, `coverage.rotation` cannot distinguish the two
+    /// cases, so neither can this field -- both collapse to an empty
+    /// `Vec`, the same convention `damage_by_skill`/etc. above use for
+    /// their own suboption gates.
+    pub casts: Vec<CastRow>,
+}
+
+/// One cast, `blocks.rotation.by_entity[id].casts[]`. Mirrors the native
+/// `CastRow` field-for-field; carried as its own local type (rather than
+/// re-exporting the native struct) for the same reason every other row
+/// type in this module is local -- this projection's public shape should
+/// not change just because axilog's internal representation does.
+///
+/// No skill name/icon resolved here, unlike [`SkillRow`]: the brief this
+/// struct was built against does not ask for one, and a rotation view can
+/// already join `skill_id` against a skill catalog if migration Task 7
+/// gives it one.
+#[derive(Debug, Clone)]
+pub struct CastRow {
+    pub skill_id: u32,
+    pub cast_time_ms: i64,
+    pub duration_ms: i64,
+    pub time_gained_ms: i64,
+    pub quickness: f64,
+}
+
+/// The WvW map's fixed world rectangle and arena image --
+/// `blocks.replay.tracks.arena`. Mirrors native `ArenaOut` field-for-field
+/// (`image_url` widened from `&'static str` to `String` since this
+/// projection is an owned copy, not a borrow of the native report).
+///
+/// See [`FightData::arena`]'s doc comment for the pixel-projection
+/// formula every `(x, y)` in [`PlayerData::positions`] needs run through
+/// this rect before it is plottable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arena {
+    pub image_width: u32,
+    pub image_height: u32,
+    pub image_url: String,
+    pub world_min_x: f64,
+    pub world_min_y: f64,
+    pub world_max_x: f64,
+    pub world_max_y: f64,
 }
 
 /// One buff row on [`PlayerData::boons`].
@@ -360,6 +486,29 @@ impl FightData {
         // the healing addon, which their own `Option`s encode per-row
         // rather than a second coverage entry.
         let series = require(&r.blocks.series, "series", &r.coverage);
+        // `replay`'s intervals half (`by_entity`) is always-on (Task 11),
+        // so under this crate's fixed `PARSE_OPTS` its coverage can only
+        // ever be `Present`/`Empty`, same as the six blocks above --
+        // `require` is the right check even though the OTHER half
+        // (`tracks`, gated on `--replay`) is a per-field `Option` this
+        // function branches on separately below, not a second coverage
+        // entry. See `ReplayBlock`'s own doc comment for the two-gate
+        // split.
+        let replay = require(&r.blocks.replay, "replay", &r.coverage);
+        // Same story for `rotation`: the block itself is built
+        // unconditionally (`aftercast` is always-on), so `coverage.rotation`
+        // can only read `Present`/`Empty` here -- the `--rotation` gate is
+        // `RotationEntity::casts`'s own `Option`, read per-row below.
+        let rotation = require(&r.blocks.rotation, "rotation", &r.coverage);
+        let arena = replay.tracks.as_ref().and_then(|t| t.arena).map(|a| Arena {
+            image_width: a.image_width,
+            image_height: a.image_height,
+            image_url: a.image_url.to_string(),
+            world_min_x: a.world_min_x,
+            world_min_y: a.world_min_y,
+            world_max_x: a.world_max_x,
+            world_max_y: a.world_max_y,
+        });
         // Log-wide, not per-entity -- see `FightData::healing_available`'s
         // doc comment. `NotComputed` is already fatal via the `require`
         // call above (this crate's `PARSE_OPTS` never leaves a gate
@@ -393,6 +542,9 @@ impl FightData {
                     let contrib = contribution.by_entity.get(e.id);
                     let boon_map = boons.by_entity.get(e.id);
                     let series_row = series.by_entity.get(e.id);
+                    let replay_row = replay.by_entity.get(e.id);
+                    let track_row = replay.tracks.as_ref().and_then(|t| t.by_entity.get(e.id));
+                    let rotation_row = rotation.by_entity.get(e.id);
 
                     players.push(PlayerData {
                         entity_id: e.id,
@@ -561,6 +713,36 @@ impl FightData {
                         health_percents: series_row
                             .and_then(|s| s.health_percents.clone())
                             .unwrap_or_default(),
+
+                        positions: track_row
+                            .map(|t| {
+                                t.samples
+                                    .iter()
+                                    .map(|(_, x, y)| (*x as f32, *y as f32))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        down_ranges: replay_row.map(|iv| iv.down.clone()).unwrap_or_default(),
+                        dead_ranges: replay_row.map(|iv| iv.dead.clone()).unwrap_or_default(),
+                        dc_ranges: replay_row.map(|iv| iv.dc.clone()).unwrap_or_default(),
+                        active_ms: replay_row.map(|iv| iv.active_ms).unwrap_or_default(),
+                        dist_to_com: replay_row.and_then(|iv| dist_to_com(iv.dist_to_com)),
+
+                        casts: rotation_row
+                            .and_then(|r| r.casts.as_ref())
+                            .map(|casts| {
+                                casts
+                                    .iter()
+                                    .map(|c| CastRow {
+                                        skill_id: c.skill_id,
+                                        cast_time_ms: c.cast_time_ms,
+                                        duration_ms: c.duration_ms,
+                                        time_gained_ms: c.time_gained_ms,
+                                        quickness: c.quickness,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
                     });
                 }
                 Role::EnemyPlayer => {
@@ -592,8 +774,57 @@ impl FightData {
             players,
             enemies,
             entity_index,
+            arena,
             healing_available,
         }
+    }
+}
+
+/// Collapses native's tri-state `dist_to_com`/`stack_dist` convention
+/// (`None` = pass never ran, `Some(-1.0)` = ran and nothing qualified,
+/// `Some(x >= 0.0)` = a real distance) to this projection's two-state
+/// `Option<f32>` -- see [`PlayerData::dist_to_com`]'s doc comment for why
+/// the two absent cases are safe to fold together here. `-1.0` is an EXACT
+/// sentinel on the native side (`axilog_core::analysis::distance::
+/// NO_DISTANCE`, a `const` assigned directly rather than the result of any
+/// averaging that could land near but not on it -- confirmed by that
+/// module's own tests, which assert `== NO_DISTANCE` rather than an
+/// epsilon comparison), so an exact equality check here is not a
+/// float-comparison hazard.
+fn dist_to_com(raw: Option<f64>) -> Option<f32> {
+    const NO_DISTANCE: f64 = -1.0;
+    match raw {
+        Some(d) if d == NO_DISTANCE => None,
+        Some(d) => Some(d as f32),
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod dist_to_com_tests {
+    use super::dist_to_com;
+
+    #[test]
+    fn absent_pass_stays_none() {
+        assert_eq!(dist_to_com(None), None);
+    }
+
+    #[test]
+    fn the_ei_sentinel_collapses_to_none_not_a_negative_distance() {
+        assert_eq!(dist_to_com(Some(-1.0)), None);
+    }
+
+    #[test]
+    fn a_real_zero_distance_survives_as_some() {
+        // `0.0` must NOT be treated as absent -- only the exact `-1.0`
+        // sentinel is. A commander standing on top of themselves is a
+        // real, meaningful `Some(0.0)`.
+        assert_eq!(dist_to_com(Some(0.0)), Some(0.0));
+    }
+
+    #[test]
+    fn a_positive_distance_narrows_to_f32() {
+        assert_eq!(dist_to_com(Some(123.5)), Some(123.5_f32));
     }
 }
 
