@@ -35,6 +35,10 @@ pub struct Derived {
     pub boon_uptimes: Vec<crate::boon_uptime::BoonUptime>,
 
     // --- Timeline lane samples --------------------------------------
+    /// Health percent per second. Empty -- for the WHOLE lane, not one
+    /// gap at a time -- when the health pass never saw this entity, so
+    /// the Timeline draws it with `draw_empty_lane`. It is never filled
+    /// with 100%: an unmeasured lane must not read like a measured one.
     pub health_samples:    Vec<f64>,
     pub dmg_dealt_samples: Vec<u64>,
     pub dmg_taken_samples: Vec<u64>,

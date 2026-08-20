@@ -192,18 +192,22 @@ pub fn status_at(dead_ranges: &[(u64, u64)], down_ranges: &[(u64, u64)], t_ms: u
 /// Health percent at time `t_ms`. `samples` is
 /// `PlayerData::health_percents` — `(time_ms, hp_percent)` step-function
 /// pairs. Returns the most recent sample whose time is <= `t_ms`. Falls
-/// back to the first sample if `t_ms` is before any sample. Returns
-/// 100.0 if no samples.
-pub fn health_at(samples: &[(u64, f64)], t_ms: u64) -> f64 {
+/// back to the first sample if `t_ms` is before any sample.
+///
+/// `None` when there are no samples at all: an entity the health pass
+/// never saw has no measured health, and 100% would be a fabricated one
+/// — a dead player would read as a full green bar. Callers draw the
+/// absence instead.
+pub fn health_at(samples: &[(u64, f64)], t_ms: u64) -> Option<f64> {
     if samples.is_empty() {
-        return 100.0;
+        return None;
     }
     let mut last = samples[0].1;
     for (t, hp) in samples {
         if *t > t_ms { break; }
         last = *hp;
     }
-    last
+    Some(last)
 }
 
 /// Boon stack count at time `t_ms`. `states` is `BoonRow::states` —
@@ -467,12 +471,19 @@ fn render_party_panel(
         let (fill_color, fill_frac, label): ([f32; 4], f32, String) = match status {
             MemberStatus::Dead => ([0.55, 0.13, 0.13, 1.0], 1.0, "Dead".to_string()),
             MemberStatus::Down => ([0.23, 0.51, 0.96, 1.0], 1.0, "Down".to_string()),
-            MemberStatus::Alive => {
-                let c = if hp > 50.0 { [0.13, 0.77, 0.37, 1.0] }
-                    else if hp > 25.0 { [0.96, 0.62, 0.04, 1.0] }
-                    else { [0.93, 0.27, 0.27, 1.0] };
-                (c, (hp / 100.0) as f32, format!("{}%", hp.round() as i32))
-            }
+            // No health series for this entity: draw the bar UNFILLED
+            // with an em dash, rather than inventing a percentage. A
+            // full green bar would be indistinguishable from a real
+            // measurement of full health.
+            MemberStatus::Alive => match hp {
+                None => ([0.0, 0.0, 0.0, 0.0], 0.0, "—".to_string()),
+                Some(hp) => {
+                    let c = if hp > 50.0 { [0.13, 0.77, 0.37, 1.0] }
+                        else if hp > 25.0 { [0.96, 0.62, 0.04, 1.0] }
+                        else { [0.93, 0.27, 0.27, 1.0] };
+                    (c, (hp / 100.0) as f32, format!("{}%", hp.round() as i32))
+                }
+            },
         };
         let fill_w = (bar_w * fill_frac).max(0.0);
         if fill_w > 0.0 {
@@ -591,7 +602,9 @@ struct PlayerDot<'a> {
     is_commander: bool,
     group: i32,
     status: MemberStatus,
-    health_pct: f64,
+    /// `None` when this entity has no health series at all — see
+    /// [`health_at`].
+    health_pct: Option<f64>,
     /// Index of the most recent sample at or before time_ms, in THIS
     /// player's own track. Meaningless in any other player's track.
     sample_idx: usize,

@@ -57,13 +57,21 @@ pub fn render_content(
     let lanes_top_y = lanes_origin[1];
 
     // Every lane draws `Option<f32>` per second so a lane CAN have gaps;
-    // the first three simply never do (health, damage dealt and damage
-    // taken are defined for every second of the fight), so they wrap in
-    // `Some` at the call site rather than each carrying an Option they
-    // would never populate.
+    // health, damage dealt and damage taken simply never do -- once
+    // present they are defined for every second of the fight -- so they
+    // wrap in `Some` at the call site rather than each carrying an
+    // Option they would never populate. Health can still be absent for
+    // the WHOLE lane, which is the empty-slice case below.
     if layers.health {
-        let v: Vec<Option<f32>> = health.iter().map(|x| Some(*x as f32)).collect();
-        draw_area_lane(ui, "Health", COLOR_HEALTH, &v, 100.0);
+        // Empty means the health pass never saw this entity. That is an
+        // absence, not 100% -- see `timeline_health::
+        // sample_health_per_second`.
+        if health.is_empty() {
+            draw_empty_lane(ui, "Health", COLOR_HEALTH, "no health data");
+        } else {
+            let v: Vec<Option<f32>> = health.iter().map(|x| Some(*x as f32)).collect();
+            draw_area_lane(ui, "Health", COLOR_HEALTH, &v, 100.0);
+        }
     }
     if layers.damage_dealt {
         let v: Vec<Option<f32>> = dmg_dealt.iter().map(|x| Some(*x as f32)).collect();
@@ -460,7 +468,9 @@ fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::der
     use crate::pulse_metrics::*;
 
     let p = &fight.players[idx];
-    let ending_hp = p.health_percents.last().map(|(_, hp)| *hp).unwrap_or(100.0);
+    // `None` when the health pass never saw this entity: the card reads
+    // "—" rather than claiming a measured 100%.
+    let ending_hp: Option<f64> = p.health_percents.last().map(|(_, hp)| *hp);
     let deaths_n = deaths(p);
     let downs_n = downs(p);
     let dmg_taken = damage_taken(p);
@@ -482,7 +492,11 @@ fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::der
     let start_y = cursor[1];
 
     let health_lines = vec![
-        ("Ending HP", format!("{:.0}%", ending_hp), if ending_hp <= 0.0 { COLOR_DMG } else { COLOR_HEALTH }),
+        (
+            "Ending HP",
+            ending_hp.map_or_else(|| "—".to_string(), |hp| format!("{hp:.0}%")),
+            if ending_hp.is_some_and(|hp| hp <= 0.0) { COLOR_DMG } else { COLOR_HEALTH },
+        ),
         ("Deaths",    deaths_n.to_string(),         if deaths_n == 0 { COLOR_HEALTH } else { COLOR_DMG }),
         ("Downs",     downs_n.to_string(),          if downs_n  == 0 { COLOR_HEALTH } else { COLOR_TAKEN }),
         ("Dmg Taken", short_value(dmg_taken),       COLOR_TAKEN),
