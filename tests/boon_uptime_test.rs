@@ -1,10 +1,21 @@
 mod common;
 
-use arcdps_axipulse::boon_uptime::{boon_name, collect_uptimes, BoonStacking, BoonUptime};
+use arcdps_axipulse::boon_uptime::{
+    boon_name, collect_uptimes, parse_stacking, BoonStacking, BoonUptime,
+};
 use arcdps_axipulse::fight_data::{BoonRow, FightData, PlayerData};
 
-fn boon(id: u32, uptime_pct: f64, avg_stacks: Option<f64>) -> BoonRow {
-    BoonRow { buff_id: id, uptime_pct, avg_stacks, ..BoonRow::default() }
+/// `stacking` is a native-shaped string ("intensity"/"duration") because
+/// that field, not any table in this crate, is what `collect_uptimes`
+/// reads to decide which number the bar shows.
+fn boon(id: u32, stacking: &str, uptime_pct: f64, avg_stacks: Option<f64>) -> BoonRow {
+    BoonRow {
+        buff_id: id,
+        stacking: stacking.to_string(),
+        uptime_pct,
+        avg_stacks,
+        ..BoonRow::default()
+    }
 }
 
 #[test]
@@ -19,16 +30,47 @@ fn boon_name_returns_known_names() {
     assert_eq!(boon_name(999_999), None);
 }
 
+/// Stacking mode now comes from axilog's own per-buff string, not from
+/// a hardcoded id table in this crate. Anything else is `None` rather
+/// than a guessed default -- a guess would misdraw the bar (Ã·25 vs Ã·100)
+/// instead of failing.
 #[test]
-fn boon_name_classifies_stacking() {
-    use arcdps_axipulse::boon_uptime::boon_stacking;
-    assert_eq!(boon_stacking(740), BoonStacking::Intensity);
-    assert_eq!(boon_stacking(1122), BoonStacking::Intensity);
-    assert_eq!(boon_stacking(725), BoonStacking::Duration);
-    assert_eq!(boon_stacking(717), BoonStacking::Duration);
-    assert_eq!(boon_stacking(1187), BoonStacking::Duration);
-    assert_eq!(boon_stacking(30328), BoonStacking::Duration);
-    assert_eq!(boon_stacking(743), BoonStacking::Duration);
+fn stacking_is_parsed_from_the_native_string() {
+    assert_eq!(parse_stacking("intensity"), Some(BoonStacking::Intensity));
+    assert_eq!(parse_stacking("duration"), Some(BoonStacking::Duration));
+    assert_eq!(parse_stacking(""), None);
+    assert_eq!(parse_stacking("Duration"), None);
+    assert_eq!(parse_stacking("stacks"), None);
+}
+
+/// A row whose stacking mode did not resolve is OMITTED: nothing says
+/// whether its number is stacks or a percentage, so there is no honest
+/// bar to draw.
+#[test]
+fn a_row_with_an_unrecognised_stacking_mode_is_omitted() {
+    let p = PlayerData {
+        boons: vec![boon(740, "", 99.0, Some(18.3)), boon(725, "duration", 85.5, None)],
+        ..PlayerData::default()
+    };
+    let ups = collect_uptimes(&p);
+    assert_eq!(ups.len(), 1);
+    assert_eq!(ups[0].id, 725);
+}
+
+/// The bar reads `avg_stacks` or `uptime_pct` according to the ROW, even
+/// when that disagrees with what this crate's WvW table would have
+/// guessed from the id: Might (id 740) is an intensity boon by every
+/// convention, but a row that declares itself `duration` surfaces its
+/// `uptime_pct`. Pins that there is exactly one decider.
+#[test]
+fn the_rows_own_stacking_decides_which_number_surfaces() {
+    let p = PlayerData {
+        boons: vec![boon(740, "duration", 99.0, Some(18.3))],
+        ..PlayerData::default()
+    };
+    let ups = collect_uptimes(&p);
+    assert_eq!(ups[0].stacking, BoonStacking::Duration);
+    assert_eq!(ups[0].uptime, 99.0);
 }
 
 /// An intensity boon reports AVERAGE STACKS and a duration boon reports
@@ -40,10 +82,10 @@ fn boon_name_classifies_stacking() {
 fn collect_uptimes_returns_known_boons_in_canonical_order() {
     let p = PlayerData {
         boons: vec![
-            boon(725, 85.5, None),
-            boon(740, 99.0, Some(18.3)),
-            boon(999_999, 50.0, None),
-            boon(1187, 42.1, None),
+            boon(725, "duration", 85.5, None),
+            boon(740, "intensity", 99.0, Some(18.3)),
+            boon(999_999, "duration", 50.0, None),
+            boon(1187, "duration", 42.1, None),
         ],
         ..PlayerData::default()
     };
@@ -60,7 +102,7 @@ fn collect_uptimes_returns_known_boons_in_canonical_order() {
 /// what says the buff was measured at all.
 #[test]
 fn an_intensity_boon_with_no_average_reports_zero_stacks() {
-    let p = PlayerData { boons: vec![boon(740, 0.0, None)], ..PlayerData::default() };
+    let p = PlayerData { boons: vec![boon(740, "intensity", 0.0, None)], ..PlayerData::default() };
     assert_eq!(collect_uptimes(&p)[0].uptime, 0.0);
 }
 
@@ -68,7 +110,7 @@ fn an_intensity_boon_with_no_average_reports_zero_stacks() {
 /// reported as 0%.
 #[test]
 fn a_boon_with_no_row_is_omitted_rather_than_zeroed() {
-    let p = PlayerData { boons: vec![boon(725, 10.0, None)], ..PlayerData::default() };
+    let p = PlayerData { boons: vec![boon(725, "duration", 10.0, None)], ..PlayerData::default() };
     let ups = collect_uptimes(&p);
     assert_eq!(ups.len(), 1);
     assert_eq!(ups[0].id, 725);
