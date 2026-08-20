@@ -39,7 +39,6 @@ fn identity_fields_are_populated_for_every_squad_player() {
             "{} has neither profession nor elite_spec resolved",
             p.account,
         );
-        assert!(p.subgroup >= 0, "{} has a negative subgroup", p.account);
     }
 }
 

@@ -14,21 +14,9 @@
 mod common;
 use arcdps_axipulse::fight_data::FightData;
 
-fn close(a: u64, b: u64) -> bool {
-    close_within(a, b, 0.01)
-}
-
-fn close_within(a: u64, b: u64, tolerance: f64) -> bool {
-    if a == 0 && b == 0 {
-        return true;
-    }
-    let hi = a.max(b) as f64;
-    ((a as f64 - b as f64).abs() / hi) < tolerance
-}
-
 /// The brief's Step 1 test, for the local player (the fixture's
 /// recorder): `damage_by_skill` is non-empty, every row has a name, and
-/// the summed `total` is within 1% of the scalar `damage`. Through
+/// the summed `total` equals the scalar `damage` exactly. Through
 /// Task 7 the top row by `total` was additionally proved to match the
 /// top row of the EI player's `total_damage_dist[0]` by skill id --
 /// dropped with the oracle it depended on.
@@ -52,35 +40,40 @@ fn damage_by_skill_is_named_and_sums_to_the_scalar_for_the_local_player() {
     }
 
     let summed: u64 = p.damage_by_skill.iter().map(|r| r.total).sum();
-    assert!(
-        close(summed, p.damage),
-        "damage_by_skill sum ({summed}) not within 1% of PlayerData::damage ({})",
+    // Exact, not within a band: both sides come from the same native
+    // event pass -- see `damage_by_skill_sums_to_the_scalar_across_the_
+    // squad` below.
+    assert_eq!(
+        summed, p.damage,
+        "damage_by_skill sum ({summed}) != PlayerData::damage ({})",
         p.damage,
     );
 }
 
 /// Every squad member's per-skill damage rows sum to that same player's
-/// scalar `damage`, within the same 1% tolerance used against the EI
-/// oracle elsewhere in this migration. Measured against this fixture: all
-/// 46 squad members match EXACTLY (worst observed gap 0.0%), which makes
-/// sense given `DamageEntity::by_skill` and `DamageEntity::total` come
-/// from the same underlying event pass -- but the exact figure is not
-/// asserted as an identity here since nothing documents it as one by
-/// construction (unlike `down_contribution_by_skill`'s sum, checked
-/// below).
+/// scalar `damage`, EXACTLY. `DamageEntity::by_skill` and
+/// `DamageEntity::total` come out of the same event pass, so this is an
+/// identity, not an approximation -- all 46 squad members in this
+/// fixture match to the unit. The 1% band this used to carry was an
+/// Elite-Insights-era tolerance for comparing two different parsers;
+/// there is only one parser now, and a same-source identity asserted
+/// with a tolerance would hide a real drift of up to 1%. Matches its
+/// sibling `barrier_by_skill_sums_to_the_scalar_across_the_squad`.
 #[test]
 fn damage_by_skill_sums_to_the_scalar_across_the_squad() {
     let n = common::native();
     let f = FightData::from_report(&n);
+    let mut checked = 0;
     for p in f.players.iter().filter(|p| p.in_squad) {
         let summed: u64 = p.damage_by_skill.iter().map(|r| r.total).sum();
-        assert!(
-            close(summed, p.damage),
-            "{}: damage_by_skill sum ({summed}) not within 1% of damage ({})",
-            p.account,
-            p.damage,
+        assert_eq!(
+            summed, p.damage,
+            "{}: damage_by_skill sum ({summed}) != damage ({})",
+            p.account, p.damage,
         );
+        checked += 1;
     }
+    assert!(checked > 0, "no squad members to check");
 }
 
 /// `down_contribution_by_skill` has no EI counterpart worth comparing

@@ -75,22 +75,37 @@ fn rejects_a_raw_length_mismatch_too() {
     decode_series(&s);
 }
 
+/// Every damage/damage-taken series in the fixture decodes to a
+/// CUMULATIVE curve: non-decreasing, sample to sample.
+///
+/// This used to assert `decoded.len() == s.len`, which `decode_series`
+/// itself panics on a mismatch of (see `rejects_a_length_mismatch`
+/// above) -- so the assertion re-checked what the call it just made had
+/// already proved, and could only fail by panicking inside that call.
+/// Monotonicity is independent of the decoder: it is a property of the
+/// DATA, and it is the property every consumer relies on (the timeline
+/// buckets differentiate these series into per-second deltas, which a
+/// decreasing step would turn into a negative amount of damage).
 #[test]
-fn every_fixture_series_decodes_to_its_declared_length() {
+fn every_fixture_series_decodes_to_a_non_decreasing_curve() {
     let n = common::native();
     let series = n.blocks.series.as_ref().expect("series present");
+    let mut checked = 0;
     for (id, e) in &series.by_entity.0 {
-        assert_eq!(
-            decode_series(&e.damage).len(),
-            e.damage.len as usize,
-            "entity {id}"
-        );
-        assert_eq!(
-            decode_series(&e.damage_taken).len(),
-            e.damage_taken.len as usize,
-            "entity {id}"
-        );
+        for (label, raw) in [("damage", &e.damage), ("damage_taken", &e.damage_taken)] {
+            let decoded = decode_series(raw);
+            for w in decoded.windows(2) {
+                assert!(
+                    w[1] >= w[0],
+                    "entity {id} {label}: cumulative series went backwards, {} -> {}",
+                    w[0],
+                    w[1],
+                );
+            }
+            checked += decoded.len();
+        }
     }
+    assert!(checked > 0, "no series samples decoded -- the check above is vacuous");
 }
 
 /// Through Task 7 this was additionally proved against Elite Insights'
