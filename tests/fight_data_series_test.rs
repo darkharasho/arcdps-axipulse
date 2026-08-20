@@ -7,7 +7,7 @@
 //! consumer at once.
 
 mod common;
-use arcdps_axipulse::fight_data::{decode_series, FightData};
+use arcdps_axipulse::fight_data::{decode_series, FightData, MAX_SERIES_LEN};
 use axilog_api::v1::series::SeriesOut;
 
 #[test]
@@ -73,6 +73,62 @@ fn rejects_a_raw_length_mismatch_too() {
         data: serde_json::json!([1, 2, 3]).as_array().unwrap().clone(),
     };
     decode_series(&s);
+}
+
+/// A corrupt/malicious `len` that would allocate `Vec::with_capacity`
+/// far beyond anything a real fight could produce must be rejected
+/// BEFORE that allocation runs, not after -- an allocation failure
+/// aborts the process rather than unwinding, so no `catch_unwind`
+/// upstream can save it. See `MAX_SERIES_LEN`'s doc comment.
+#[test]
+#[should_panic(expected = "corrupt `len`")]
+fn rejects_an_oversized_declared_len() {
+    let s = SeriesOut {
+        interval_ms: 1000,
+        len: MAX_SERIES_LEN + 1,
+        enc: "raw",
+        data: Vec::new(),
+    };
+    decode_series(&s);
+}
+
+/// The `len` check alone does not close this hazard: a small, innocuous
+/// `len` paired with one corrupt RLE run still grows the `Vec` without
+/// bound as `out.extend` runs, regardless of the capacity it started
+/// with. This is the larger of the two allocation hazards -- the
+/// trailing `assert_eq!` against `s.len` cannot help here either, since
+/// it only runs after the runaway extend has already happened.
+#[test]
+#[should_panic(expected = "would grow the decoded series past")]
+fn rejects_a_runaway_rle_run() {
+    let s = SeriesOut {
+        interval_ms: 1000,
+        len: 5,
+        enc: "rle",
+        data: serde_json::json!([[0, MAX_SERIES_LEN + 1]])
+            .as_array()
+            .unwrap()
+            .clone(),
+    };
+    decode_series(&s);
+}
+
+/// A legitimately maximum-length series -- exactly `MAX_SERIES_LEN`
+/// buckets -- must still decode. This pins that the `+ 1` in
+/// `MAX_SERIES_LEN`'s derivation (the ceiling grid's trailing bucket) is
+/// not tighter than a real fight can produce.
+#[test]
+fn a_series_at_the_bound_still_decodes() {
+    let len = MAX_SERIES_LEN;
+    let s = SeriesOut {
+        interval_ms: 1000,
+        len,
+        enc: "rle",
+        data: serde_json::json!([[0, len]]).as_array().unwrap().clone(),
+    };
+    let decoded = decode_series(&s);
+    assert_eq!(decoded.len() as u64, len);
+    assert!(decoded.iter().all(|&v| v == 0));
 }
 
 /// Every damage/damage-taken series in the fixture decodes to a

@@ -43,6 +43,27 @@ pub fn clamp_duration_ms(duration_ms: u64) -> u64 {
     duration_ms.min(MAX_DURATION_MS)
 }
 
+/// Upper bound on a decoded [`SeriesOut`]'s length, derived from
+/// [`MAX_DURATION_MS`] rather than picked independently.
+///
+/// A series is axilog's per-second curve over the fight, so its longest
+/// legitimate length follows directly from the same six-hour ceiling:
+/// one bucket per second of `MAX_DURATION_MS`, plus one. That `+ 1` is
+/// not slack for corruption -- axilog's per-second grid is a CEILING
+/// grid (`axilog_schema::v1::series::SeriesOut`'s own contract), so a
+/// fight that runs any part of a trailing second still gets a full
+/// bucket for it. Without the `+ 1` a legitimate maximum-length series
+/// would trip this bound, which is the failure this constant exists to
+/// avoid causing.
+///
+/// [`decode_series`] is the only place this is checked, and it checks it
+/// BEFORE allocating: an unclamped `len` (or, worse, an unclamped RLE
+/// `run` that grows a `Vec` past this regardless of its initial
+/// capacity) risks the same hazard `MAX_DURATION_MS` documents -- an
+/// allocation failure ABORTS rather than unwinds, taking the game
+/// process down where `parse_log`'s `catch_unwind` cannot help.
+pub const MAX_SERIES_LEN: u64 = MAX_DURATION_MS / 1000 + 1;
+
 /// Everything the UI needs about one fight, read once from a native
 /// `ReportV1`.
 ///
@@ -492,13 +513,45 @@ pub struct BoonRow {
 /// against the wrong number of buckets with no signal that anything was
 /// wrong; panicking is the same "wrong shape is a bug, not data" stance
 /// `require` takes for a missing block.
+///
+/// Before any of that, this function checks the declared `len` and, as
+/// it accumulates, every RLE run against [`MAX_SERIES_LEN`] -- both are
+/// log-controlled `u64`s with no upper bound of their own, and unlike the
+/// `len`/`data` disagreement above, an oversized one is a hazard at
+/// ALLOCATION time, not after: an allocation failure aborts the process
+/// rather than unwinding, so `parse_log`'s `catch_unwind` cannot turn it
+/// into a `ParseError` the way it can a panic. These checks panic (same
+/// stance, same reason) but do so before the allocation they are
+/// guarding against, not after.
 pub fn decode_series(s: &SeriesOut) -> Vec<u64> {
+    assert!(
+        s.len <= MAX_SERIES_LEN,
+        "SeriesOut declares len {} but a legitimate series cannot exceed \
+         {} buckets (MAX_DURATION_MS's six hours, in whole seconds, plus \
+         the ceiling grid's trailing bucket) -- refusing to allocate for \
+         a corrupt `len` (enc: {:?})",
+        s.len,
+        MAX_SERIES_LEN,
+        s.enc,
+    );
     let out: Vec<u64> = match s.enc {
         "rle" => {
             let mut out = Vec::with_capacity(s.len as usize);
             for pair in &s.data {
                 let value = pair[0].as_u64().unwrap_or_default();
                 let run = pair[1].as_u64().unwrap_or_default();
+                assert!(
+                    out.len() as u64 + run <= MAX_SERIES_LEN,
+                    "SeriesOut RLE run of {} at value {} would grow the \
+                     decoded series past {} buckets ({} already decoded) \
+                     -- MAX_SERIES_LEN bounds this regardless of the \
+                     declared `len`, so a corrupt run cannot run away the \
+                     allocation",
+                    run,
+                    value,
+                    MAX_SERIES_LEN,
+                    out.len(),
+                );
                 out.extend(std::iter::repeat(value).take(run as usize));
             }
             out
