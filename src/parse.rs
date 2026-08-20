@@ -77,7 +77,7 @@ pub fn parse_log(path: &Path) -> Result<FightData, ParseError> {
 /// Best-effort text of a caught panic payload. `panic!` with a literal
 /// gives a `&'static str`, with a format gives a `String`, and anything
 /// else is opaque.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {

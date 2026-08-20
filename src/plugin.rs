@@ -290,9 +290,35 @@ impl Drop for ParsingGuard {
     }
 }
 
+/// Runs on the `axipulse-parser` thread, once per detected log.
+///
+/// The whole body is inside a `catch_unwind` for the same reason
+/// `parse::parse_log` has one, extended one layer out: `parse_log`'s own
+/// guard ends at `FightData::from_report`, but `Derived::compute` (which
+/// fans out to eleven leaf modules), `wvw_teams::count_teams` and
+/// `push_fight` all run afterwards on this same thread. A panic in any
+/// of them used to unwind the parser thread, which drops the work
+/// receiver; the watcher's next `tx_work.send` then fails and the
+/// watcher thread returns, so NO further log is parsed for the rest of
+/// the GW2 session. Catching here costs one log instead.
 fn on_new_log(path: PathBuf) {
     let label = path.file_stem().and_then(|s| s.to_str()).unwrap_or("(log)").to_string();
     let _parsing = ParsingGuard::new(label);
+    // Unwind-safe: everything shared is behind a Mutex (poisoning is
+    // already handled at every lock site here), and the only values
+    // being built are local and dropped on the unwind path.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        on_new_log_inner(path)
+    }));
+    if let Err(payload) = outcome {
+        log::warn!(
+            "axipulse: post-parse processing panicked: {}",
+            crate::parse::panic_message(payload.as_ref()),
+        );
+    }
+}
+
+fn on_new_log_inner(path: PathBuf) {
     log::warn!("axipulse: parsing {path:?}");
     // In-process, no install root and no Elite Insights settings: the
     // log bytes go straight into axilog and come back as a `FightData`.
