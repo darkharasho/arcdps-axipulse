@@ -13,6 +13,36 @@ use axilog_api::v1::series::SeriesOut;
 use axilog_api::v1::ReportV1;
 use std::collections::HashMap;
 
+/// Upper bound on a fight's reported duration, in milliseconds.
+///
+/// Native computes `encounter.duration_ms` as `last event time -
+/// log_start_ms` and never clamps it, so a single corrupt trailing
+/// timestamp yields an arbitrarily large `u64`. Downstream, both
+/// `timeline_health::sample_health_per_second` and
+/// `timeline_distance::distance_to_commander_per_second` size a
+/// per-second `Vec` from it (`duration_ms / 1000 + 1`), which scales
+/// linearly and unboundedly: a 10^12 ms duration asks for ~10^9 entries
+/// per lane. An allocation that large fails, and an allocation failure
+/// ABORTS rather than unwinds -- it takes the game process down, where
+/// the parse path's `catch_unwind` cannot help.
+///
+/// Six hours. The bound is deliberately far above anything real (a WvW
+/// log is minutes; arcdps rotates logs long before this) so it can only
+/// ever fire on a corrupt timestamp, while still capping every
+/// downstream per-second allocation at ~21,601 entries.
+///
+/// It CLAMPS rather than rejects: every scalar in the report is still a
+/// real measurement, only the timeline's axis is truncated, and a
+/// truncated timeline beats discarding the log.
+pub const MAX_DURATION_MS: u64 = 6 * 60 * 60 * 1_000;
+
+/// The single place [`MAX_DURATION_MS`] is applied. Every consumer sizes
+/// its per-second buffers from `FightData::duration_ms`, so bounding it
+/// here bounds all of them.
+pub fn clamp_duration_ms(duration_ms: u64) -> u64 {
+    duration_ms.min(MAX_DURATION_MS)
+}
+
 /// Everything the UI needs about one fight, read once from a native
 /// `ReportV1`.
 ///
@@ -894,7 +924,7 @@ impl FightData {
         let commander_idx = players.iter().position(|p| p.is_commander);
 
         FightData {
-            duration_ms: r.encounter.duration_ms,
+            duration_ms: clamp_duration_ms(r.encounter.duration_ms),
             map_name: r.encounter.map.clone(),
             map_id: r.encounter.map_id,
             started_at_unix: r.encounter.started_at_unix,

@@ -142,3 +142,42 @@ fn down_contribution_is_populated_and_covered() {
         "down_contribution is uniformly zero across the whole squad"
     );
 }
+
+/// `duration_ms` is a log-controlled `u64` -- native computes it as
+/// `last event time - log_start_ms` and never clamps it -- and several
+/// consumers size a per-second `Vec` from it. A single corrupt trailing
+/// timestamp would therefore ask for an arbitrarily large allocation,
+/// and an allocation failure ABORTS the process rather than unwinding,
+/// so the parse path's `catch_unwind` could not contain it. The clamp in
+/// `FightData::from_report` is the one place that bound is applied.
+#[test]
+fn an_absurd_duration_is_clamped_to_the_plausible_maximum() {
+    use arcdps_axipulse::fight_data::{clamp_duration_ms, MAX_DURATION_MS};
+
+    // The scenario: a 10^12 ms timestamp, which would otherwise size two
+    // per-second lanes at ~10^9 entries each.
+    assert_eq!(clamp_duration_ms(1_000_000_000_000), MAX_DURATION_MS);
+    assert_eq!(clamp_duration_ms(u64::MAX), MAX_DURATION_MS);
+    // The bound caps every downstream per-second buffer at this many
+    // entries -- the size `timeline_health`/`timeline_distance` reserve.
+    assert_eq!((MAX_DURATION_MS / 1000) as usize + 1, 21_601);
+}
+
+/// The clamp is a corruption guard, not a policy that touches real logs:
+/// anything at or under the bound passes through byte-identical, and the
+/// fixture -- a real WvW fight -- is nowhere near it.
+#[test]
+fn a_plausible_duration_passes_through_unchanged() {
+    use arcdps_axipulse::fight_data::{clamp_duration_ms, MAX_DURATION_MS};
+
+    assert_eq!(clamp_duration_ms(0), 0);
+    assert_eq!(clamp_duration_ms(137_452), 137_452);
+    assert_eq!(clamp_duration_ms(MAX_DURATION_MS), MAX_DURATION_MS);
+
+    let f = FightData::from_report(&common::native());
+    assert!(
+        f.duration_ms > 0 && f.duration_ms < MAX_DURATION_MS,
+        "fixture duration {} is not a plausible un-clamped fight length",
+        f.duration_ms,
+    );
+}
