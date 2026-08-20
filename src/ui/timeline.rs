@@ -1,5 +1,5 @@
 #![cfg(windows)]
-//! Timeline tab content — six stacked swim-lanes + inspector cards.
+//! Timeline tab content — eight stacked swim-lanes + inspector cards.
 //! Outer window lives in `ui::main`.
 
 use arcdps::imgui::Ui;
@@ -18,6 +18,8 @@ const COLOR_TAKEN:  [f32; 4] = [0.97, 0.55, 0.42, 1.0];
 const COLOR_DIST:   [f32; 4] = [0.95, 0.75, 0.40, 1.0];
 const COLOR_OFF:    [f32; 4] = [0.42, 0.65, 0.94, 1.0];
 const COLOR_DEF:    [f32; 4] = [0.32, 0.78, 0.92, 1.0];
+const COLOR_HEAL_IN:    [f32; 4] = [0.35, 0.88, 0.62, 1.0];
+const COLOR_BARRIER_IN: [f32; 4] = [0.85, 0.72, 0.32, 1.0];
 
 const LANE_LABEL_W: f32 = 92.0;
 const LANE_PAD_Y:   f32 = 2.0;
@@ -45,6 +47,8 @@ pub fn render_content(
     let distance  = if layers.distance_to_tag  { derived.distance_samples.as_slice() }  else { &[] };
     let off: &[_] = if layers.offensive_boons  { derived.off_boons.as_slice() }         else { &[] };
     let def: &[_] = if layers.defensive_boons  { derived.def_boons.as_slice() }         else { &[] };
+    let heal_in: &[u64]    = if layers.incoming_healing { derived.incoming_heal_samples.as_slice() }    else { &[] };
+    let barrier_in: &[u64] = if layers.incoming_barrier { derived.incoming_barrier_samples.as_slice() } else { &[] };
 
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
     let lanes_origin = ui.cursor_screen_pos();
@@ -86,11 +90,36 @@ pub fn render_content(
     if layers.defensive_boons {
         draw_boon_lane(ui, "Def Boons", COLOR_DEF, &def, dur);
     }
+    // Absent for the WHOLE lane (not one gap at a time) when the log has
+    // no healing addon data or this player has no series row -- see
+    // `Derived::incoming_heal_samples`'s doc comment. An empty slice is
+    // that absence; a non-empty slice of zeros is a real "received
+    // nothing" measurement and draws as a flat lane, same as any other
+    // area lane would.
+    if layers.incoming_healing {
+        if heal_in.is_empty() {
+            let reason = if fight.healing_available { "no data" } else { "no healing addon" };
+            draw_empty_lane(ui, "Heal In", COLOR_HEAL_IN, reason);
+        } else {
+            let v: Vec<Option<f32>> = heal_in.iter().map(|x| Some(*x as f32)).collect();
+            draw_area_lane_auto(ui, "Heal In", COLOR_HEAL_IN, &v);
+        }
+    }
+    if layers.incoming_barrier {
+        if barrier_in.is_empty() {
+            let reason = if fight.healing_available { "no data" } else { "no healing addon" };
+            draw_empty_lane(ui, "Barrier In", COLOR_BARRIER_IN, reason);
+        } else {
+            let v: Vec<Option<f32>> = barrier_in.iter().map(|x| Some(*x as f32)).collect();
+            draw_area_lane_auto(ui, "Barrier In", COLOR_BARRIER_IN, &v);
+        }
+    }
 
     let lanes_bottom_y = ui.cursor_screen_pos()[1];
     draw_hover_crosshair(
         ui, data_x, data_w, lanes_top_y, lanes_bottom_y, dur,
         layers, &health, &dmg_dealt, &dmg_taken, &distance, &off, &def,
+        heal_in, barrier_in,
     );
 
     ui.dummy([0.0, 6.0]);
@@ -98,17 +127,20 @@ pub fn render_content(
 }
 
 fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
-    let pairs: [(&str, &mut bool); 6] = [
+    let pairs: [(&str, &mut bool); 8] = [
         ("Health",     &mut layers.health),
         ("Dmg Dealt",  &mut layers.damage_dealt),
         ("Dmg Taken",  &mut layers.damage_taken),
         ("Dist Tag",   &mut layers.distance_to_tag),
         ("Off Boons",  &mut layers.offensive_boons),
         ("Def Boons",  &mut layers.defensive_boons),
+        ("Heal In",    &mut layers.incoming_healing),
+        ("Barrier In", &mut layers.incoming_barrier),
     ];
+    let n = pairs.len();
     for (i, (label, value)) in pairs.into_iter().enumerate() {
         ui.checkbox(label, value);
-        if i + 1 < 6 { ui.same_line(); }
+        if i + 1 < n { ui.same_line(); }
     }
 }
 
@@ -147,6 +179,8 @@ fn draw_hover_crosshair(
     distance: &[Option<f64>],
     off: &[crate::timeline_boons::BoonSeries],
     def: &[crate::timeline_boons::BoonSeries],
+    heal_in: &[u64],
+    barrier_in: &[u64],
 ) {
     if !ui.is_mouse_hovering_rect([data_x, top_y], [data_x + data_w, bottom_y]) {
         return;
@@ -208,6 +242,16 @@ fn draw_hover_crosshair(
             .map(|s| s.name).collect();
         let label = if active.is_empty() { "none".to_string() } else { active.join(", ") };
         rows.push(("Def Boons", COLOR_DEF, label));
+    }
+    if layers.incoming_healing && !heal_in.is_empty() {
+        if let Some(i) = sample_idx(heal_in.len()) {
+            rows.push(("Heal In", COLOR_HEAL_IN, short_value(heal_in[i])));
+        }
+    }
+    if layers.incoming_barrier && !barrier_in.is_empty() {
+        if let Some(i) = sample_idx(barrier_in.len()) {
+            rows.push(("Barrier In", COLOR_BARRIER_IN, short_value(barrier_in[i])));
+        }
     }
 
     draw_tooltip(ui, mouse, t_ms, &rows, data_x, data_w);

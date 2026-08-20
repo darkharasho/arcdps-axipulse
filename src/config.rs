@@ -44,6 +44,8 @@ pub struct TimelineLayers {
     pub distance_to_tag: bool,
     pub offensive_boons: bool,
     pub defensive_boons: bool,
+    pub incoming_healing: bool,
+    pub incoming_barrier: bool,
 }
 
 impl Default for TimelineLayers {
@@ -55,6 +57,8 @@ impl Default for TimelineLayers {
             distance_to_tag: true,
             offensive_boons: true,
             defensive_boons: true,
+            incoming_healing: true,
+            incoming_barrier: true,
         }
     }
 }

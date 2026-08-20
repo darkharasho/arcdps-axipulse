@@ -45,6 +45,15 @@ pub struct Derived {
     pub distance_samples:  Vec<Option<f64>>,
     pub off_boons:         Vec<crate::timeline_boons::BoonSeries>,
     pub def_boons:         Vec<crate::timeline_boons::BoonSeries>,
+    /// Incoming healing/barrier per second. Empty -- for the WHOLE
+    /// lane, not one gap at a time -- when the log has no healing addon
+    /// data (`FightData::healing_available == false`) or this player
+    /// has no series row; see
+    /// `timeline_buckets::extract_incoming_healing`'s doc comment. The
+    /// Timeline draws the whole-lane-absent case with `draw_empty_lane`,
+    /// same as it already does for `distance_samples` with no commander.
+    pub incoming_heal_samples:    Vec<u64>,
+    pub incoming_barrier_samples: Vec<u64>,
 }
 
 impl Derived {
@@ -53,7 +62,10 @@ impl Derived {
         use crate::fight_composition::compute as compute_comp;
         use crate::squad_rank::{rank_in_squad, RankMetric};
         use crate::timeline_boons::{defensive_boons, offensive_boons};
-        use crate::timeline_buckets::{extract_damage_dealt, extract_damage_taken};
+        use crate::timeline_buckets::{
+            extract_damage_dealt, extract_damage_taken,
+            extract_incoming_barrier, extract_incoming_healing,
+        };
         use crate::timeline_distance::distance_to_commander_per_second;
         use crate::timeline_health::sample_health_per_second;
         use crate::top_heals::{top_barrier, top_downed_healing, top_healing};
@@ -87,6 +99,8 @@ impl Derived {
         d.distance_samples  = distance_to_commander_per_second(fight, idx, dur);
         d.off_boons         = offensive_boons(p, dur);
         d.def_boons         = defensive_boons(p, dur);
+        d.incoming_heal_samples    = extract_incoming_healing(p);
+        d.incoming_barrier_samples = extract_incoming_barrier(p);
 
         d
     }
