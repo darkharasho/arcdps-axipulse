@@ -12,13 +12,39 @@ use crate::fight_data::FightData;
 // Each retained fight costs real memory inside the game process. A
 // `FightData` is a purpose-built projection rather than a whole parsed
 // document -- the `ReportV1` it was read from is dropped inside
-// `parse::parse_log` and never stored -- but it still carries every
-// squad member's per-second series and position track, so the history
-// cap earned in the Elite Insights era still applies: 32 slots let a
-// long session pin gigabytes and drove the box into parse-time swap
-// storms; 8 bounds the worst case while still covering "compare the
-// last few fights".
-const HISTORY_CAP: usize = 8;
+// `parse::parse_log` and never stored -- and it turns out to be far
+// smaller than the retained `EiJson` it replaced (~15-25 MB slimmed,
+// ~78 MB before), which is why this cap is measured up again rather
+// than left at the value the Elite Insights era's footprint forced.
+//
+// Measured 2026-08-19 with `cargo run --release --example measure_mem`
+// against `tests/fixtures/wvw.zevtc` (a real mid-size WvW fight: 47
+// squad players, 46 enemies, 138.3s): one retained `FightRecord`
+// (`FightData` + `Derived`) is exactly 1,126,034 bytes (~1.07 MB),
+// computed field-by-field (`size_of` + every `Vec`/`String`/`HashMap`
+// heap allocation reachable from it) rather than read off process RSS,
+// since `mimalloc` (this crate's global allocator) does not reliably
+// hand freed pages back to the OS between an RSS-before and an
+// RSS-after reading -- an RSS delta over- or under-reports the retained
+// size depending on which side of a `drop` it is taken on. Of that
+// total, ~507 KB (~45%) is the part that scales with fight length and
+// roster size (per-second damage/health/boon series and position
+// tracks); the rest (strings, per-skill/heal rows, icon catalogs)
+// scales with roster only.
+//
+// Worst case, assuming a squad+enemy roster up to ~1.5x this fixture's
+// 93 tracked entities and a fight running up to ~900s (~6.5x this
+// fixture's 138s, well past a typical WvW engagement into siege
+// territory): non-scaling part 605,898 B x1.5 + scaling part 507,320 B
+// x6.5x1.5 ≈ 5.86 MB, rounded up to 6 MB/fight for approximation slack
+// (Vec capacity vs len, HashMap bucket overhead, catalog growth this
+// estimate does not model). Against the same ~200 MB worst-case budget
+// the previous cap targeted (8 slots x ~25 MB), 200 MB / 6 MB ≈ 33,
+// rounded down to 32 for headroom (32 x 6 MB = 192 MB) and because it
+// is a clean, familiar number -- the cap Elite Insights forced this
+// constant down from in the first place. Against the fight actually
+// measured, 32 slots is nowhere near tight: 32 x 1.07 MB ≈ 34 MB.
+const HISTORY_CAP: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct FightRecord {
