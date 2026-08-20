@@ -12,11 +12,14 @@
 //!
 //! - An exact, allocator-independent byte count: walks `FightData` and
 //!   `Derived` field by field, summing `size_of` for the stack shape
-//!   plus `Vec::capacity()`/`String::capacity()`/`HashMap::capacity()`
-//!   for every heap allocation reachable from them. This is what
-//!   `HISTORY_CAP`'s arithmetic is built on, because it counts exactly
-//!   the bytes retained by a `FightRecord` and nothing else -- no parse
-//!   scratch space, no allocator slack.
+//!   plus, for every heap allocation reachable from them, `String::
+//!   capacity()` for a string and `len() * size_of::<T>()` for a
+//!   `Vec<T>`/entry count for a `HashMap` (a floor on the true
+//!   allocation, not `capacity()`, since a nested field is often only
+//!   available as a slice -- see `vec_heap`'s own doc comment). This is
+//!   what `HISTORY_CAP`'s arithmetic is built on, because it counts
+//!   exactly the bytes retained by a `FightRecord` and nothing else --
+//!   no parse scratch space, no allocator slack.
 //! - A process RSS reading (`/proc/self/status`), printed for sanity
 //!   only. `mimalloc` is the crate's global allocator and, like most
 //!   sub-allocators, does not always hand freed pages back to the OS
