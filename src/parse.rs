@@ -1,6 +1,6 @@
 //! Reading a log, start to finish, inside the game process.
 //!
-//! There is no subprocess, no .NET runtime and no intermediate JSON: the
+//! There is no subprocess, no separate managed runtime and no intermediate JSON: the
 //! bytes go straight into axilog and come back out as a [`FightData`].
 //! The `ReportV1` is dropped at the end of [`parse_log`] and never
 //! retained -- that is the whole reason the plugin no longer needs a

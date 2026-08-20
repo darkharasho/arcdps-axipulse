@@ -8,51 +8,21 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
 use crate::config::{default_cbtlogs, Config};
-use crate::ei_bundle::{default_install_root, install_from_bytes, BUNDLED_EI_VERSION, BUNDLED_EI_ZIP};
-use crate::ei_settings::EiSettings;
 use crate::state::{AppState, FightRecord};
 
 struct Globals {
     state: Mutex<AppState>,
     config: Mutex<Config>,
-    /// Still set at init and still read by `install_root()` for the
-    /// sidecar tile-asset directory. The Elite Insights install it also
-    /// used to point at is no longer parsed from -- migration Task 8
-    /// removes that half.
-    install_root: Mutex<Option<PathBuf>>,
-    /// Orphaned by the axilog cutover: nothing reads it now that
-    /// `parse_log` takes no settings. Kept until migration Task 8
-    /// deletes `ei_settings.rs` and the options panel that writes it.
-    #[allow(dead_code)]
-    settings: Mutex<EiSettings>,
 }
 
 static G: Lazy<Globals> = Lazy::new(|| Globals {
     state: Mutex::new(AppState::new()),
     config: Mutex::new(Config::load()),
-    install_root: Mutex::new(None),
-    settings: Mutex::new(EiSettings::default()),
 });
 
 pub fn init() -> Result<(), Option<String>> {
     let _ = &*G;
     crate::diag::set_enabled(G.config.lock().ok().map(|c| c.debug_logging).unwrap_or(false));
-
-    let Some(install_root) = default_install_root() else {
-        log::warn!("axipulse init: no install root (LOCALAPPDATA missing); aborting");
-        return Ok(());
-    };
-    if let Err(e) = install_from_bytes(BUNDLED_EI_ZIP, BUNDLED_EI_VERSION, &install_root) {
-        log::warn!("axipulse init: EI extract failed: {e}; subsequent parses will error");
-    } else {
-        log::warn!("axipulse init: EI installed at {install_root:?}");
-    }
-    if let Err(e) = crate::ei_bundle::install_dotnet(&install_root) {
-        log::warn!("axipulse init: .NET extract failed: {e}; EI will not be able to run");
-    } else {
-        log::warn!("axipulse init: .NET 8 runtime installed at {:?}", crate::ei_bundle::dotnet_root(&install_root));
-    }
-    if let Ok(mut slot) = G.install_root.lock() { *slot = Some(install_root); }
 
     let cbtlogs = match G.config.lock().ok().map(|c| c.cbtlogs_path.clone()).filter(|s| !s.is_empty()) {
         Some(s) => Some(PathBuf::from(s)),
@@ -240,13 +210,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static PARSING_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn is_parsing() -> bool { PARSING_COUNT.load(Ordering::Relaxed) > 0 }
-
-/// Resolved directory the DLL was loaded from. Used by the tile cache
-/// to locate sidecar assets at `<install_root>/axipulse-assets/tiles/`.
-/// Returns `None` until arcdps has told us the install location.
-pub fn install_root() -> Option<std::path::PathBuf> {
-    G.install_root.lock().ok().and_then(|g| g.clone())
-}
 
 /// Directory containing the loaded `arcdps_axipulse.dll` (e.g.
 /// `<gw2>/addons/`). Resolved lazily on first call via the standard

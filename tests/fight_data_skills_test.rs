@@ -1,9 +1,15 @@
 //! Task 4: proves the per-skill damage, down-contribution, healing and
 //! barrier distributions `FightData::from_report` projects onto
-//! `PlayerData` -- against the frozen Elite Insights oracle
-//! (`tests/fixtures/wvw.ei.json`) where EI has an equivalent surface, and
-//! against a native-side invariant for `down_contribution_by_skill`, which
-//! it does not (see that test's doc comment).
+//! `PlayerData`.
+//!
+//! Through Task 7, the surfaces with an Elite Insights equivalent
+//! (damage, healing, barrier) were additionally proved against a frozen
+//! EI oracle (`tests/fixtures/wvw.ei.json`, deleted by Task 8 along with
+//! `ei_model.rs` -- the oracle has served its purpose). What remains
+//! below are native-only invariants: rows resolve names, per-skill sums
+//! reconcile against their own scalar where the fixture shows they
+//! should, and `down_contribution_by_skill` -- which never had an EI
+//! counterpart -- keeps its own by-construction sum check.
 
 mod common;
 use arcdps_axipulse::fight_data::FightData;
@@ -20,19 +26,18 @@ fn close_within(a: u64, b: u64, tolerance: f64) -> bool {
     ((a as f64 - b as f64).abs() / hi) < tolerance
 }
 
-/// The brief's Step 1 test, for the local player (the fixture's recorder):
-/// `damage_by_skill` is non-empty, every row has a name, the summed
-/// `total` is within 1% of the scalar `damage`, and the top row by
-/// `total` matches the top row of the EI player's `total_damage_dist[0]`
-/// by skill id.
+/// The brief's Step 1 test, for the local player (the fixture's
+/// recorder): `damage_by_skill` is non-empty, every row has a name, and
+/// the summed `total` is within 1% of the scalar `damage`. Through
+/// Task 7 the top row by `total` was additionally proved to match the
+/// top row of the EI player's `total_damage_dist[0]` by skill id --
+/// dropped with the oracle it depended on.
 #[test]
-fn damage_by_skill_matches_the_ei_oracle_for_the_local_player() {
+fn damage_by_skill_is_named_and_sums_to_the_scalar_for_the_local_player() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
     let si = f.self_idx.expect("fixture has a recorder");
     let p = &f.players[si];
-    let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
 
     assert!(
         !p.damage_by_skill.is_empty(),
@@ -51,22 +56,6 @@ fn damage_by_skill_matches_the_ei_oracle_for_the_local_player() {
         close(summed, p.damage),
         "damage_by_skill sum ({summed}) not within 1% of PlayerData::damage ({})",
         p.damage,
-    );
-
-    let native_top = p
-        .damage_by_skill
-        .iter()
-        .max_by_key(|r| r.total)
-        .expect("non-empty, checked above");
-    let ei_top = ep
-        .total_damage_dist
-        .first()
-        .and_then(|phase| phase.iter().max_by_key(|d| d.total_damage))
-        .expect("EI oracle has a phase-0 damage distribution for the local player");
-    assert_eq!(
-        native_top.skill_id as i64, ei_top.id,
-        "top damage skill diverges: native={} ({}) ei={} ({})",
-        native_top.skill_id, native_top.total, ei_top.id, ei_top.total_damage,
     );
 }
 
@@ -123,16 +112,20 @@ fn down_contribution_by_skill_sums_exactly_to_the_scalar_across_the_squad() {
     assert!(checked > 0, "no squad members to check");
 }
 
-/// `healing_by_skill` against the EI oracle, for every squad member whose
-/// row is non-empty (i.e. whose client ran the healing addon and left a
+/// `healing_by_skill` is populated for every squad member whose row is
+/// non-empty (i.e. whose client ran the healing addon and left a
 /// `detail` breakdown -- `healing_by_skill`/`barrier_by_skill` are empty,
-/// not wrong, for everyone else). Measured against this fixture: all 34
-/// such members match EI's `extHealingStats.totalHealingDist[0]` sum
-/// within 1% (worst observed gap 0.0%).
+/// not wrong, for everyone else). Through Task 7 the sum was additionally
+/// proved against Elite Insights' `extHealingStats.totalHealingDist[0]`
+/// sum -- dropped with the oracle, and deliberately NOT replaced with a
+/// same-scope native reconciliation: `healing_by_skill`'s per-row totals
+/// include self-healing while the scalar `healing_out` is ally-only
+/// (see `fight_data_scalars_test`'s module doc), so the two are not
+/// expected to agree and measured on this fixture, do not (up to 75%
+/// apart for players who mostly self-healed).
 #[test]
-fn healing_by_skill_matches_the_ei_oracle_within_one_percent() {
+fn healing_by_skill_rows_are_populated_when_present() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
     let mut checked = 0;
     for p in f
@@ -140,19 +133,8 @@ fn healing_by_skill_matches_the_ei_oracle_within_one_percent() {
         .iter()
         .filter(|p| p.in_squad && !p.healing_by_skill.is_empty())
     {
-        let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
         let native_sum: u64 = p.healing_by_skill.iter().map(|r| r.total).sum();
-        let ei_sum: u64 = ep
-            .ext_healing_stats
-            .as_ref()
-            .and_then(|h| h.total_healing_dist.first())
-            .map(|entries| entries.iter().map(|d| d.total_healing).sum())
-            .unwrap_or(0);
-        assert!(
-            close(native_sum, ei_sum),
-            "{}: healing_by_skill sum ({native_sum}) not within 1% of EI's total_healing_dist sum ({ei_sum})",
-            p.account,
-        );
+        assert!(native_sum > 0, "{}: healing_by_skill sums to zero despite non-empty rows", p.account);
         checked += 1;
     }
     assert!(
@@ -161,19 +143,16 @@ fn healing_by_skill_matches_the_ei_oracle_within_one_percent() {
     );
 }
 
-/// `barrier_by_skill` against the EI oracle, same shape as the healing
-/// check above. Measured against this fixture: 16 squad members have a
-/// non-empty `barrier_by_skill`; the worst observed gap against EI's
-/// `extBarrierStats.totalBarrierDist[0]` sum is 2.68% (the same
-/// `Anon178.7586` divergence `fight_data_scalars_test.rs`'s
-/// `barrier_out_matches_the_ei_oracle_within_a_measured_bound` already
-/// documents for the scalar `barrier_out` -- this is that same gap,
-/// reappearing on the per-skill breakdown of the same underlying number,
-/// not a new one). Bounded at 3%, matching that test's measured headroom.
+/// `barrier_by_skill` has no self/allies split (unlike healing), so its
+/// sum reconciles exactly with the scalar `barrier_out` -- both are read
+/// off the same underlying block. Through Task 7 the sum was additionally
+/// proved against Elite Insights' oracle within a measured 3% bound;
+/// dropped with the oracle, replaced with the stronger same-source
+/// identity, which holds exactly (0% gap) for all 16 squad members with a
+/// non-empty row on this fixture.
 #[test]
-fn barrier_by_skill_matches_the_ei_oracle_within_a_measured_bound() {
+fn barrier_by_skill_sums_to_the_scalar_across_the_squad() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
     let mut checked = 0;
     for p in f
@@ -181,18 +160,11 @@ fn barrier_by_skill_matches_the_ei_oracle_within_a_measured_bound() {
         .iter()
         .filter(|p| p.in_squad && !p.barrier_by_skill.is_empty())
     {
-        let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
         let native_sum: u64 = p.barrier_by_skill.iter().map(|r| r.total).sum();
-        let ei_sum: u64 = ep
-            .ext_barrier_stats
-            .as_ref()
-            .and_then(|b| b.total_barrier_dist.first())
-            .map(|entries| entries.iter().map(|d| d.total_barrier).sum())
-            .unwrap_or(0);
-        assert!(
-            close_within(native_sum, ei_sum, 0.03),
-            "{}: barrier_by_skill sum ({native_sum}) diverged beyond the measured 3% bound from EI's total_barrier_dist sum ({ei_sum})",
-            p.account,
+        assert_eq!(
+            native_sum, p.barrier_out,
+            "{}: barrier_by_skill sum ({native_sum}) != barrier_out ({})",
+            p.account, p.barrier_out,
         );
         checked += 1;
     }

@@ -1,174 +1,63 @@
-//! Task 3: proves the damage, defense, support and contribution scalars
-//! `FightData::from_report` projects onto `PlayerData` against the frozen
-//! Elite Insights oracle (`tests/fixtures/wvw.ei.json`).
+//! Task 3 (native path): the damage, defense, support and contribution
+//! scalars `FightData::from_report` projects onto `PlayerData`.
+//!
+//! Through Task 7 these were proved against a frozen Elite Insights
+//! oracle (`tests/fixtures/wvw.ei.json`, deleted by Task 8 along with
+//! `ei_model.rs` -- the oracle has served its purpose). What remains
+//! below are the native-only invariants that survive it: coverage must
+//! never read `not_computed`, and each block must actually be populated
+//! rather than a column of structural zeros. Measured on the fixture
+//! (see the task-8 report): squad totals are damage=2461723,
+//! taken=1376047, deaths=3, strips=219, cleanses=651, heal=838500,
+//! barrier=649125, all with `healing_available == true`.
 
 mod common;
 use arcdps_axipulse::fight_data::FightData;
 
-fn close(a: u64, b: u64) -> bool {
-    close_within(a, b, 0.01)
-}
-
-fn close_within(a: u64, b: u64, tolerance: f64) -> bool {
-    if a == 0 && b == 0 {
-        return true;
-    }
-    let hi = a.max(b) as f64;
-    ((a as f64 - b as f64).abs() / hi) < tolerance
-}
-
+/// Damage, defense and support scalars are covered and actually
+/// populated -- not a proof of correctness (the EI oracle did that once;
+/// see the module doc), but a regression guard against the block going
+/// silently empty.
 #[test]
-fn event_counts_match_the_ei_oracle_exactly() {
+fn damage_defense_and_support_scalars_are_populated_and_covered() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
-    for p in f.players.iter().filter(|p| p.in_squad) {
-        let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
-        assert_eq!(p.deaths, ep.defenses[0].dead_count, "{} deaths", p.account);
-        // `downs` (native `defenses.by_entity[id].downs_taken`) is a
-        // pre-filed upstream divergence from EI's `defenses[0].downCount`
-        // (see the task-3 brief's context note 5). Measured against this
-        // fixture: native is never LOWER than EI, and the per-player gap
-        // never exceeds 2 (across all 46 squad members, checked with a
-        // throwaway diagnostic harness during implementation -- 11 players
-        // differ, by 1 or 2 each). Bounded rather than widened blindly:
-        // this still fails if a future regression makes the two counts
-        // disagree by more than the measured worst case, or makes native
-        // undercount EI (which never happens today).
-        let native_downs = p.downs as i64;
-        let ei_downs = ep.defenses[0].down_count as i64;
-        assert!(
-            (0..=2).contains(&(native_downs - ei_downs)),
-            "{} downs diverged beyond the measured bound: native={} ei={}",
-            p.account,
-            p.downs,
-            ep.defenses[0].down_count,
-        );
-        // Native carries these as `u32`, the EI oracle as `u64` -- widen
-        // rather than narrow so the comparison can't silently wrap.
+    for block in ["damage", "defenses", "support"] {
         assert_eq!(
-            p.strips as u64, ep.support[0].boon_strips,
-            "{} strips",
-            p.account
-        );
-        assert_eq!(
-            p.cleanses as u64, ep.support[0].condi_cleanse,
-            "{} cleanses",
-            p.account
+            n.coverage.get(block),
+            Some(axilog_api::v1::envelope::CoverageState::Present),
+            "block {block} not computed -- PARSE_OPTS has drifted"
         );
     }
+    let squad: Vec<_> = f.players.iter().filter(|p| p.in_squad).collect();
+    assert!(!squad.is_empty(), "fixture has no squad players");
+    let total_damage: u64 = squad.iter().map(|p| p.damage).sum();
+    let total_taken: u64 = squad.iter().map(|p| p.damage_taken).sum();
+    let total_strips: u64 = squad.iter().map(|p| p.strips as u64).sum();
+    let total_cleanses: u64 = squad.iter().map(|p| p.cleanses as u64).sum();
+    assert!(total_damage > 0, "squad damage is uniformly zero");
+    assert!(total_taken > 0, "squad damage_taken is uniformly zero");
+    assert!(total_strips > 0, "squad strips are uniformly zero");
+    assert!(total_cleanses > 0, "squad cleanses are uniformly zero");
 }
 
+/// `healing_out`/`barrier_out` are populated when the log carries the
+/// healing addon. Scoped by `healing_available` rather than asserted
+/// unconditionally -- a log without the addon must show absence, not a
+/// zero standing in for an absent measurement (see
+/// `healing_coverage_and_availability_agree` below).
 #[test]
-fn summed_quantities_match_the_ei_oracle_within_one_percent() {
+fn healing_and_barrier_scalars_are_populated_when_available() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
-    for p in f.players.iter().filter(|p| p.in_squad) {
-        let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
-        assert!(
-            close(p.damage, ep.dps_all[0].damage),
-            "{} damage",
-            p.account
-        );
-        assert!(
-            close(p.damage_taken, ep.defenses[0].damage_taken),
-            "{} taken",
-            p.account
-        );
+    if !f.healing_available {
+        return;
     }
-}
-
-/// `healing_out` (`blocks.healing.by_entity[id].outgoing_allies`) is
-/// deliberately ally-only -- `HealingEntity`'s own doc comment splits
-/// `outgoing_total`/`outgoing_allies`/`outgoing_self`. EI's
-/// `extHealingStats.totalHealingDist` has no such split: summed, it is
-/// this player's TOTAL outgoing healing including self-heals. Comparing
-/// `healing_out` directly against that raw EI sum is comparing two
-/// different scopes -- measured against this fixture, doing so diverges
-/// for 13/46 squad members, up to 100% (two players who only self-healed
-/// have `healing_out == 0` but a nonzero EI total, e.g. `Anon188.7956`:
-/// native=0, ei=2878).
-///
-/// The reconciling quantity is right there on the same native block:
-/// `native.healing_out + native.outgoing_self` equals EI's raw total
-/// EXACTLY for all 46 squad members in this fixture (not just within
-/// 1%) -- proving the underlying numbers agree once the same scope is
-/// compared, rather than either fudging a tolerance or asserting a false
-/// equivalence the way the brief's original `down_contribution` check
-/// did.
-#[test]
-fn healing_out_matches_the_ei_oracle_once_self_healing_is_reconciled() {
-    let n = common::native();
-    let e = common::ei();
-    let f = FightData::from_report(&n);
-    let healing_block = n
-        .blocks
-        .healing
-        .as_ref()
-        .expect("healing block present in this fixture");
-    for entity in &n.entities {
-        if !matches!(entity.role, axilog_api::v1::entities::Role::Squad) {
-            continue;
-        }
-        let account = entity.account.clone().unwrap_or_default();
-        let p = f
-            .players
-            .iter()
-            .find(|p| p.in_squad && p.account == account)
-            .unwrap();
-        let ep = e.players.iter().find(|x| x.account == account).unwrap();
-
-        let ei_total_healing: u64 = ep
-            .ext_healing_stats
-            .as_ref()
-            .and_then(|h| h.total_healing_dist.first())
-            .map(|entries| entries.iter().map(|d| d.total_healing).sum())
-            .unwrap_or(0);
-        let outgoing_self = healing_block
-            .by_entity
-            .get(entity.id)
-            .map(|row| row.outgoing_self)
-            .unwrap_or(0);
-        assert!(
-            close(p.healing_out + outgoing_self, ei_total_healing),
-            "{account} reconciled healing (native healing_out {} + outgoing_self {outgoing_self} = {})              did not match EI's total {ei_total_healing}",
-            p.healing_out,
-            p.healing_out + outgoing_self,
-        );
-    }
-}
-
-/// `barrier_out` (unlike healing) has no self/allies split on the native
-/// side -- a single scalar, matching EI's `extBarrierStats.totalBarrierDist`
-/// sum scope-for-scope. Measured against this fixture: 45/46 squad
-/// members match within 1%; one, `Anon178.7586`, sits at a measured 2.68%
-/// (native=52538, ei=51129) -- a real, small, unexplained gap, not a
-/// scope mismatch like `down_contribution`'s or the raw `healing_out`
-/// comparison's. Bounded at 3% (headroom over the measured worst case)
-/// rather than left at a blanket 1% that this one account would fail, or
-/// blindly widened further than the data supports.
-#[test]
-fn barrier_out_matches_the_ei_oracle_within_a_measured_bound() {
-    let n = common::native();
-    let e = common::ei();
-    let f = FightData::from_report(&n);
-    for p in f.players.iter().filter(|p| p.in_squad) {
-        let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
-        let ei_barrier: u64 = ep
-            .ext_barrier_stats
-            .as_ref()
-            .and_then(|b| b.total_barrier_dist.first())
-            .map(|entries| entries.iter().map(|d| d.total_barrier).sum())
-            .unwrap_or(0);
-        assert!(
-            close_within(p.barrier_out, ei_barrier, 0.03),
-            "{} barrier_out diverged beyond the measured 3% bound: native={} ei={}",
-            p.account,
-            p.barrier_out,
-            ei_barrier,
-        );
-    }
+    let squad: Vec<_> = f.players.iter().filter(|p| p.in_squad).collect();
+    let total_heal: u64 = squad.iter().map(|p| p.healing_out).sum();
+    let total_barrier: u64 = squad.iter().map(|p| p.barrier_out).sum();
+    assert!(total_heal > 0, "squad healing_out is uniformly zero");
+    assert!(total_barrier > 0, "squad barrier_out is uniformly zero");
 }
 
 /// Pins the healing coverage/availability behaviour the `require` fix

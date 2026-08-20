@@ -1,6 +1,9 @@
 //! `rank_in_squad` over both a synthetic roster (for the ordering rules)
-//! and the real fixture (for the range invariant, plus an equality
-//! oracle against Elite Insights' own damage ranking).
+//! and the real fixture (for the range invariant). Through Task 7 the
+//! local player's rank was additionally proved against an Elite
+//! Insights equality oracle, deleted by Task 8 -- the range invariant
+//! below already re-derives every rank from scratch each run, which is
+//! the stronger check.
 
 mod common;
 
@@ -79,40 +82,4 @@ fn every_rank_falls_inside_the_squad_on_the_real_fixture() {
             }
         }
     }
-}
-
-/// **Equality oracle.** The local player's damage rank computed off
-/// `FightData` must equal the rank produced by sorting Elite Insights'
-/// own squad by `dpsAll[0].damage`. This is the one place the two
-/// pipelines' damage numbers are compared end to end through a
-/// consumer, rather than field by field.
-#[test]
-fn the_local_players_damage_rank_matches_the_ei_oracle() {
-    let n = common::native();
-    let f = FightData::from_report(&n);
-    let e = common::ei();
-
-    let idx = f.self_idx.expect("fixture resolves a local player");
-    let me = &f.players[idx];
-    let native_rank = rank_in_squad(&f, idx, RankMetric::Damage).expect("local player is in squad");
-
-    let my_ei = e
-        .players
-        .iter()
-        .find(|p| p.account == me.account)
-        .expect("the local player appears in the EI baseline");
-    let my_ei_damage = my_ei.dps_all.first().map(|d| d.damage).unwrap_or(0);
-    // Same tie rule as `rank_in_squad`: count strictly-better players.
-    let ei_rank = e
-        .players
-        .iter()
-        .filter(|p| !p.not_in_squad && p.account != me.account)
-        .filter(|p| p.dps_all.first().map(|d| d.damage).unwrap_or(0) > my_ei_damage)
-        .count() as u32
-        + 1;
-
-    assert_eq!(
-        native_rank, ei_rank,
-        "native ranked the local player {native_rank}, EI ranked them {ei_rank}",
-    );
 }

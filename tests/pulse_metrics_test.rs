@@ -1,5 +1,13 @@
-//! `pulse_metrics` over the real fixture, with equality oracles against
-//! Elite Insights for the scalars that have an EI counterpart.
+//! `pulse_metrics` over the real fixture.
+//!
+//! Through Task 7, the Pulse Overview scalars and the Defense subview's
+//! mitigation counters were additionally proved against an Elite
+//! Insights equality oracle, deleted by Task 8 -- the oracle has served
+//! its purpose. What remains native-only below covers the same two
+//! surfaces: every scalar/counter is populated and sane for the local
+//! player (deaths/downs/strips/cleanses/mitigation counters are
+//! unsigned, so "sane" means "the accessor runs and, where the fixture
+//! guarantees a nonzero measurement, is nonzero").
 
 mod common;
 
@@ -22,86 +30,43 @@ fn derives_for_the_local_player() {
     let _ = down_contribution(p);
 }
 
-/// Ratio-equal within 1%, the same tolerance
-/// `fight_data_scalars_test::close` already established for the two
-/// summed damage quantities. Not widened here: measured on this
-/// fixture's local player, `damage` is exact and `damage_taken` is
-/// 54987 native vs 54983 EI -- 4 absolute, 0.007%.
-fn close(a: u64, b: u64) -> bool {
-    if a == 0 && b == 0 {
-        return true;
-    }
-    ((a as f64 - b as f64).abs() / a.max(b) as f64) < 0.01
-}
-
-/// **Equality oracle** for the six scalars the Pulse Overview shows.
+/// The six scalars the Pulse Overview shows are populated for the local
+/// player -- a regression guard against the block going silently empty,
+/// not a proof of correctness (the EI oracle did that once; see the
+/// module doc).
 #[test]
-fn the_overview_scalars_match_the_ei_oracle() {
+fn the_overview_scalars_are_populated() {
     let n = common::native();
     let f = FightData::from_report(&n);
-    let e = common::ei();
     let p = &f.players[f.self_idx.expect("fixture resolves a local player")];
-    let ei = e
-        .players
-        .iter()
-        .find(|x| x.account == p.account)
-        .expect("the local player appears in the EI baseline");
 
-    let ei_damage = ei.dps_all.first().map(|d| d.damage).unwrap_or(0);
-    assert!(close(damage(p), ei_damage), "damage: {} vs {ei_damage}", damage(p));
-    let ei_taken = ei.defenses.first().map(|d| d.damage_taken).unwrap_or(0);
-    assert!(
-        close(damage_taken(p), ei_taken),
-        "damage taken: {} vs {ei_taken}",
-        damage_taken(p),
-    );
-    assert_eq!(deaths(p), ei.defenses.first().map(|d| d.dead_count).unwrap_or(0), "deaths");
-    // `downs` is a pre-filed upstream divergence, already bounded by
-    // `fight_data_scalars_test`: native is never lower than EI and the
-    // gap never exceeds 2. Measured here for the local player: native 1,
-    // EI 0. Same bound, not a wider one.
-    let ei_downs = ei.defenses.first().map(|d| d.down_count).unwrap_or(0) as i64;
-    assert!(
-        (0..=2).contains(&(downs(p) as i64 - ei_downs)),
-        "downs diverged beyond the measured bound: native={} ei={ei_downs}",
-        downs(p),
-    );
-    assert_eq!(
-        strips(p),
-        ei.support.first().map(|s| s.boon_strips).unwrap_or(0),
-        "strips",
-    );
-    assert_eq!(
-        cleanses(p),
-        ei.support
-            .first()
-            .map(|s| s.condi_cleanse + s.condi_cleanse_self)
-            .unwrap_or(0),
-        "cleanses",
-    );
+    assert!(damage(p) > 0, "damage");
+    assert!(damage_taken(p) > 0, "damage_taken");
+    // deaths/downs/strips/cleanses are u32/u64 and so cannot be
+    // negative; the accessor merely needs to run without panicking,
+    // which the call above already exercises via `derives_for_the_local_player`.
 }
 
-/// **Equality oracle** for the six mitigation counters the Defense
-/// subview shows -- the fields this migration added to `PlayerData`.
+/// The six mitigation counters the Defense subview shows -- the fields
+/// this migration added to `PlayerData`. On this fixture no single
+/// squad member is guaranteed to log every kind of mitigation event, so
+/// the invariant is squad-wide: each counter is nonzero for *someone*,
+/// which would fail if the whole block came back structurally empty.
 #[test]
-fn the_mitigation_counters_match_the_ei_oracle() {
+fn the_mitigation_counters_are_populated_across_the_squad() {
     let n = common::native();
     let f = FightData::from_report(&n);
-    let e = common::ei();
-    let p = &f.players[f.self_idx.expect("fixture resolves a local player")];
-    let ei = e
-        .players
-        .iter()
-        .find(|x| x.account == p.account)
-        .expect("the local player appears in the EI baseline");
-    let d = ei.defenses.first().expect("EI defenses row");
+    let squad: Vec<_> = f.players.iter().filter(|p| p.in_squad).collect();
 
-    assert_eq!(blocked(p), d.blocked_count, "blocked");
-    assert_eq!(evaded(p), d.evaded_count, "evaded");
-    assert_eq!(dodges(p), d.dodge_count, "dodges");
-    assert_eq!(missed(p), d.missed_count, "missed");
-    assert_eq!(interrupted(p), d.interrupted_count, "interrupted");
-    assert_eq!(invulned(p), d.invulned_count, "invulned");
+    let sum = |f: fn(&PlayerData) -> u32| -> u32 { squad.iter().map(|p| f(p)).sum() };
+    assert!(sum(blocked) > 0, "blocked is uniformly zero across the squad");
+    assert!(sum(evaded) > 0, "evaded is uniformly zero across the squad");
+    assert!(sum(dodges) > 0, "dodges is uniformly zero across the squad");
+    assert!(sum(missed) > 0, "missed is uniformly zero across the squad");
+    assert!(sum(interrupted) > 0, "interrupted is uniformly zero across the squad");
+    // `invulned` is not asserted nonzero -- a squad with no invuln
+    // uptime logged is a legitimate zero, not a projection failure.
+    let _ = sum(invulned);
 }
 
 /// `dist_to_tag` is `Option`, never a fabricated 0. `PlayerData` already

@@ -1,18 +1,10 @@
 //! The purpose-built projection of axilog's native `ReportV1` that the UI
-//! will eventually read instead of the Elite Insights JSON tree.
-//!
-//! This module is additive for now (migration Task 2): nothing consumes
-//! it yet, so the roster/identity fields it carries today are the only
-//! ones proven against the frozen EI oracle. Later tasks add fields to
-//! `PlayerData` and grow `from_report` to fill them; the shape of what is
-//! already here does not change.
+//! reads instead of the Elite Insights JSON tree it replaced.
 //!
 //! `FightData::from_report` must not retain the `&ReportV1` it is handed
 //! -- it reads it once and returns owned data, per the migration's
 //! binding constraint that the native report is never stored past the
 //! call that produced it.
-
-#![allow(dead_code)] // Nothing wires this module up until migration Task 7.
 
 use axilog_api::v1::catalogs::Catalogs;
 use axilog_api::v1::entities::Role;
@@ -147,8 +139,7 @@ pub struct PlayerData {
 
     // -- Damage (blocks.damage.by_entity[id]) --
     pub damage: u64,
-    /// Rounded from the native `f64` dps (matches `ei_model::DpsAll::dps`,
-    /// which the EI adapter carries as a whole-number `u64` too).
+    /// Rounded from the native `f64` dps to a whole number for display.
     pub dps: u64,
     pub damage_taken: u64,
     pub breakbar_damage: u64,
@@ -679,10 +670,8 @@ impl FightData {
                         is_commander: e.commander.is_some(),
 
                         damage: dmg.map(|d| d.total).unwrap_or_default(),
-                        // Native carries dps as `f64`; the EI oracle
-                        // (`ei_model::DpsAll::dps`) is already `u64`, so
-                        // this rounds rather than truncates to match it
-                        // as closely as a whole number can.
+                        // Native carries dps as `f64`; round rather than
+                        // truncate for a more representative whole number.
                         dps: dmg.map(|d| d.dps.round() as u64).unwrap_or_default(),
                         damage_taken: dmg.map(|d| d.taken).unwrap_or_default(),
                         breakbar_damage: dmg.map(|d| d.breakbar_damage_dealt).unwrap_or_default(),

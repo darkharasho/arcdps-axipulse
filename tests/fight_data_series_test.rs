@@ -93,40 +93,35 @@ fn every_fixture_series_decodes_to_its_declared_length() {
     }
 }
 
+/// Through Task 7 this was additionally proved against Elite Insights'
+/// `extHealingStats.healingReceived1S` oracle, deleted by Task 8 -- the
+/// oracle has served its purpose. What remains native-only: the series
+/// is cumulative, so its last bucket is the fight-long total, and the
+/// fixture's local player must actually have one (nonzero), or the
+/// check below would be vacuous.
 #[test]
-fn incoming_healing_matches_the_ei_oracle() {
+fn incoming_healing_series_is_populated() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
     let p = &f.players[f.self_idx.unwrap()];
-    let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
-    let ei_last = ep
-        .ext_healing_stats
-        .as_ref()
-        .and_then(|h| h.healing_received_1s.first())
-        .and_then(|v| v.last())
-        .copied()
-        .unwrap_or(0);
     let got = *p.healing_received_1s.last().unwrap_or(&0);
-    assert!(ei_last > 0, "fixture must exercise the healing extension");
-    assert!(((got as f64 - ei_last as f64).abs() / ei_last as f64) < 0.01);
+    assert!(got > 0, "fixture must exercise the healing extension");
 }
 
+/// `blocks.series.by_entity[id].damage` is cumulative outgoing damage
+/// per second; its last bucket is the fight-long total, so it must
+/// agree EXACTLY with `pulse_metrics::damage`, the same scalar
+/// `top_skills_test::per_skill_damage_sums_to_the_overview_damage_scalar`
+/// checks against the per-skill distribution -- three different
+/// summaries of the same underlying damage block.
 #[test]
-fn damage_series_last_bucket_matches_the_ei_oracle() {
-    // `blocks.series.by_entity[id].damage` is cumulative outgoing damage
-    // per second, on the same grid as EI's `damage1S` -- the final bucket
-    // should agree with EI's oracle to within a small tolerance the same
-    // way the healing series above does.
+fn damage_series_last_bucket_matches_the_overview_damage_scalar() {
     let n = common::native();
-    let e = common::ei();
     let f = FightData::from_report(&n);
     let p = &f.players[f.self_idx.unwrap()];
-    let ep = e.players.iter().find(|x| x.account == p.account).unwrap();
-    let ei_last = *ep.damage_1s.first().and_then(|v| v.last()).unwrap_or(&0);
     let got = *p.damage_1s.last().unwrap_or(&0);
-    assert!(ei_last > 0, "fixture must exercise outgoing damage");
-    assert!(((got as f64 - ei_last as f64).abs() / ei_last as f64) < 0.01);
+    assert!(got > 0, "fixture must exercise outgoing damage");
+    assert_eq!(got, arcdps_axipulse::pulse_metrics::damage(p));
 }
 
 #[test]

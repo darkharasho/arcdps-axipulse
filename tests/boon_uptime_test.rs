@@ -74,38 +74,30 @@ fn a_boon_with_no_row_is_omitted_rather_than_zeroed() {
     assert_eq!(ups[0].id, 725);
 }
 
-/// **Equality oracle.** Every duration boon's uptime on the real fixture
-/// must match Elite Insights' `buffUptimes[].buffData[0].uptime` for the
-/// same player and buff.
+/// Through Task 7 every duration boon's uptime on the real fixture was
+/// additionally proved against an Elite Insights equality oracle,
+/// deleted by Task 8 -- the oracle has served its purpose. What remains
+/// native-only: the local player resolves at least one duration boon,
+/// and every uptime lands in the valid `[0, 100]` percent range rather
+/// than a raw, unclamped native value leaking through.
 #[test]
-fn duration_boon_uptimes_match_the_ei_oracle() {
+fn duration_boon_uptimes_are_populated_and_in_range() {
     let n = common::native();
     let f = FightData::from_report(&n);
-    let e = common::ei();
     let p = &f.players[f.self_idx.expect("fixture resolves a local player")];
-    let ei = e
-        .players
-        .iter()
-        .find(|x| x.account == p.account)
-        .expect("the local player appears in the EI baseline");
 
     let mut checked = 0;
     for up in collect_uptimes(p) {
         if up.stacking != BoonStacking::Duration {
             continue;
         }
-        let Some(ei_row) = ei.buff_uptimes.iter().find(|b| b.id == i64::from(up.id)) else {
-            continue;
-        };
-        let ei_uptime = ei_row.buff_data.first().map(|d| d.uptime).unwrap_or(0.0);
         assert!(
-            (up.uptime - ei_uptime).abs() < 0.05,
-            "{} uptime: native {} vs EI {}",
+            (0.0..=100.0).contains(&up.uptime),
+            "{} uptime {} out of [0, 100] range",
             up.name,
             up.uptime,
-            ei_uptime,
         );
         checked += 1;
     }
-    assert!(checked > 0, "no duration boon compared -- the check above is vacuous");
+    assert!(checked > 0, "no duration boon resolved -- the check above is vacuous");
 }

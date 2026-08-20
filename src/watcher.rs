@@ -1,8 +1,8 @@
 #![cfg(windows)]
 //! Filesystem watcher on the cbtlogs directory. Hands new `.zevtc`
 //! paths to a worker thread which calls back into the plugin. The
-//! split keeps EI subprocess spawns off the notify-receive path and
-//! ensures parses run serially even when many Create events fire in
+//! split keeps the in-process axilog parse off the notify-receive path
+//! and ensures parses run serially even when many Create events fire in
 //! a burst.
 
 use std::collections::HashSet;
@@ -20,9 +20,9 @@ where
     let (tx_work, rx_work) = mpsc::channel::<PathBuf>();
 
     // Worker: drains paths, awaits size stability, calls on_log. Serial.
-    // Runs at THREAD_PRIORITY_LOWEST so the cmd.spawn() syscall (Wine
-    // CreateProcess + PE map + .NET 8 apphost init) yields to GW2's
-    // render thread instead of causing a ~1s stutter at parse-start.
+    // Runs at THREAD_PRIORITY_LOWEST so the in-process axilog parse
+    // (a CPU-bound burst on this thread) yields to GW2's render thread
+    // instead of causing a stutter at parse-start.
     thread::Builder::new()
         .name("axipulse-parser".into())
         .spawn(move || {

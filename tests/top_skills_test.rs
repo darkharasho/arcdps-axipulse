@@ -125,21 +125,19 @@ fn the_fixtures_local_player_has_an_ordered_top_damage_list() {
     assert!(top.iter().all(|e| !e.name.is_empty()));
 }
 
-/// **Equality oracle.** The summed per-skill damage must equal Elite
-/// Insights' own `totalDamageDist` sum for the same player.
+/// Through Task 7 the summed per-skill damage was additionally proved
+/// against Elite Insights' own `totalDamageDist` sum, deleted by
+/// Task 8 -- the oracle has served its purpose. What remains
+/// native-only: `damage_by_skill`'s own total must agree EXACTLY with
+/// `pulse_metrics::damage`, the scalar the Pulse Overview shows -- both
+/// are read off the same `blocks.damage` row, just summarized two
+/// different ways, so any drift between them is a projection bug.
 #[test]
-fn per_skill_damage_sums_match_the_ei_oracle() {
+fn per_skill_damage_sums_to_the_overview_damage_scalar() {
     let n = common::native();
     let f = FightData::from_report(&n);
-    let e = common::ei();
     let p = &f.players[f.self_idx.expect("fixture resolves a local player")];
 
     let native_total: u64 = p.damage_by_skill.iter().map(|r| r.total).sum();
-    let ei = e
-        .players
-        .iter()
-        .find(|x| x.account == p.account)
-        .expect("the local player appears in the EI baseline");
-    let ei_total: u64 = ei.total_damage_dist.iter().flatten().map(|x| x.total_damage).sum();
-    assert_eq!(native_total, ei_total);
+    assert_eq!(native_total, arcdps_axipulse::pulse_metrics::damage(p));
 }

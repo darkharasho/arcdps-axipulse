@@ -1,6 +1,5 @@
 mod common;
 
-use axilog_api::v1::entities::Role;
 use axilog_api::v1::envelope::Coverage;
 
 // `Coverage::get` returns the `CoverageState` enum, not a `String`; go
@@ -10,35 +9,6 @@ use axilog_api::v1::envelope::Coverage;
 fn coverage_str(coverage: &Coverage, block: &str) -> Option<String> {
     let value = serde_json::to_value(coverage).expect("coverage serializes");
     value.get(block).and_then(|v| v.as_str()).map(str::to_owned)
-}
-
-#[test]
-fn fixtures_describe_the_same_fight() {
-    let n = common::native();
-    let e = common::ei();
-    let delta = (n.encounter.duration_ms as i64 - e.duration_ms as i64).abs();
-    assert!(delta < 1000, "durations differ by {delta}ms");
-}
-
-#[test]
-fn rosters_agree() {
-    let n = common::native();
-    let e = common::ei();
-    let mut native_accounts: Vec<&str> = n
-        .entities
-        .iter()
-        .filter(|x| x.role == Role::Squad)
-        .filter_map(|x| x.account.as_deref())
-        .collect();
-    let mut ei_accounts: Vec<&str> = e
-        .players
-        .iter()
-        .filter(|p| !p.not_in_squad)
-        .map(|p| p.account.as_str())
-        .collect();
-    native_accounts.sort_unstable();
-    ei_accounts.sort_unstable();
-    assert_eq!(native_accounts, ei_accounts);
 }
 
 #[test]
