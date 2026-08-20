@@ -72,6 +72,43 @@ fn an_unnamed_skill_falls_back_to_its_id() {
     assert_eq!(top_damage(&p, 1)[0].name, "Skill 4242");
 }
 
+/// A name that is nothing but digits has not actually named the skill,
+/// and rendering it bare reads as a value rather than an identifier.
+/// The Elite Insights reader rejected it (`resolve_skill_name`'s
+/// `parse::<i64>().is_err()` guard) and so must this.
+#[test]
+fn a_purely_numeric_name_falls_back_to_its_id() {
+    let p = PlayerData {
+        damage_by_skill: vec![
+            row(4242, "12345", 9),
+            row(77, "-3", 8),
+            // Not purely numeric -- these are real names and must survive.
+            row(88, "Symbol of Blades", 7),
+            row(99, "1000 Cuts", 6),
+        ],
+        ..PlayerData::default()
+    };
+    let top = top_damage(&p, 4);
+    assert_eq!(top[0].name, "Skill 4242");
+    assert_eq!(top[1].name, "Skill 77");
+    assert_eq!(top[2].name, "Symbol of Blades");
+    assert_eq!(top[3].name, "1000 Cuts");
+}
+
+/// The same guard has to hold for the healing and barrier lists, which
+/// go through `skill_label` too.
+#[test]
+fn top_heals_reject_a_numeric_name_as_well() {
+    use arcdps_axipulse::top_heals::{top_barrier, top_healing};
+    let p = PlayerData {
+        healing_by_skill: vec![row(1234, "1234", 50)],
+        barrier_by_skill: vec![row(5678, "", 40)],
+        ..PlayerData::default()
+    };
+    assert_eq!(top_healing(&p, 1)[0].name, "Skill 1234");
+    assert_eq!(top_barrier(&p, 1)[0].name, "Skill 5678");
+}
+
 /// On the real fixture the local player's top-damage list must be
 /// non-empty, strictly non-increasing, and capped at the limit.
 #[test]

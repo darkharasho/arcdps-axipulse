@@ -38,7 +38,11 @@ pub struct Derived {
     pub health_samples:    Vec<f64>,
     pub dmg_dealt_samples: Vec<u64>,
     pub dmg_taken_samples: Vec<u64>,
-    pub distance_samples:  Vec<f64>,
+    /// Distance to the commander, one entry per second. `None` is a
+    /// second that was NOT measured -- see
+    /// `timeline_distance::distance_to_commander_per_second`. Never
+    /// filled in with a neighbouring value or a zero.
+    pub distance_samples:  Vec<Option<f64>>,
     pub off_boons:         Vec<crate::timeline_boons::BoonSeries>,
     pub def_boons:         Vec<crate::timeline_boons::BoonSeries>,
 }

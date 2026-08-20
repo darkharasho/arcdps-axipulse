@@ -53,29 +53,37 @@ fn track_span(p: &PlayerData, poll_ms: u64) -> Option<(u64, u64)> {
     Some((p.track_start_ms, last))
 }
 
-/// One sample per second from 0 to `duration_ms` inclusive.
+/// One entry per second from 0 to `duration_ms` inclusive.
 ///
-/// Seconds outside the window where BOTH tracks were recording are
-/// clamped INTO that window rather than filled with a zero: the two
-/// players were some real distance apart at the nearest instant we
-/// measured, and 0 would read as "on top of the tag", which is the
-/// single most misleading value this lane could show. Returns an empty
-/// vec -- which the Timeline renders as "no commander tagged" rather
-/// than as a flat line -- when there is no commander, no local track, or
-/// no overlap at all.
+/// `None` means **this second was not measured**: it falls outside the
+/// window where both the local player's and the commander's tracks were
+/// recording. A commander who tags up 100s into a 300s fight leaves the
+/// first 100 entries `None`.
+///
+/// Absence is carried rather than filled in. An earlier draft clamped
+/// out-of-overlap seconds into the overlap window, which reported the
+/// distance measured at the window's edge for every second before it --
+/// a fabricated measurement, and one the inspector card then folded into
+/// the user's "average distance". A zero would be worse still (it reads
+/// as "stacked on the tag"), which is why neither is used: the honest
+/// answer for an unmeasured second is that there is no answer.
+///
+/// The returned vec is EMPTY -- a different thing from a vec of `None`s,
+/// and rendered as the lane's "no commander tagged" message -- when
+/// there is no commander, no replay grid, no track on either side, or
+/// the local player IS the commander (distance to self is not a
+/// measurement).
 pub fn distance_to_commander_per_second(
     fight: &FightData,
     self_idx: usize,
     duration_ms: u64,
-) -> Vec<f64> {
+) -> Vec<Option<f64>> {
     let poll_ms = fight.poll_ms;
     if poll_ms == 0 {
         return Vec::new();
     }
     let Some(me) = fight.players.get(self_idx) else { return Vec::new() };
     let Some(cmdr_idx) = fight.commander_idx else { return Vec::new() };
-    // The local player IS the commander: distance to self is not a
-    // meaningful lane, and rendering a flat 0 would claim a measurement.
     if cmdr_idx == self_idx {
         return Vec::new();
     }
@@ -95,15 +103,72 @@ pub fn distance_to_commander_per_second(
     let seconds = (duration_ms / 1000) as usize + 1;
     let mut out = Vec::with_capacity(seconds);
     for sec in 0..seconds {
-        let t = ((sec as u64) * 1000).clamp(win_start, win_end);
+        let t = (sec as u64) * 1000;
+        if t < win_start || t > win_end {
+            out.push(None);
+            continue;
+        }
         let (Some((mx, my)), Some((cx, cy))) =
             (position_at(me, t, poll_ms), position_at(cmdr, t, poll_ms))
         else {
-            return Vec::new();
+            out.push(None);
+            continue;
         };
         let dx = f64::from(mx - cx);
         let dy = f64::from(my - cy);
-        out.push((dx * dx + dy * dy).sqrt());
+        out.push(Some((dx * dx + dy * dy).sqrt()));
     }
     out
+}
+
+/// What the Timeline's Position inspector card reports.
+///
+/// Lives here, next to the absence it has to respect, rather than inline
+/// in `ui/timeline.rs`: the rule that an unmeasured second must not
+/// reach the denominator is the whole point of this type, and
+/// `ui/timeline.rs` is `#![cfg(windows)]` and so cannot be tested on the
+/// host at all.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DistanceSummary {
+    /// Mean over the MEASURED seconds only. The denominator is
+    /// `measured_secs`, never `total_secs`.
+    pub avg: f64,
+    pub max: f64,
+    /// How many of the fight's seconds actually had a distance.
+    pub measured_secs: usize,
+    /// How many seconds the lane spans in total.
+    pub total_secs: usize,
+}
+
+impl DistanceSummary {
+    /// True when some of the fight had no distance measurement at all --
+    /// the case the card must mark visibly, so a user reading an average
+    /// over two thirds of a fight can see that is what they are reading.
+    pub fn is_partial(&self) -> bool {
+        self.measured_secs < self.total_secs
+    }
+}
+
+/// Summarises a per-second distance lane, ignoring unmeasured seconds.
+///
+/// `None` when nothing at all was measured -- including for an all-`None`
+/// lane, which is distinct from an empty one only in how it got there.
+pub fn summarize(samples: &[Option<f64>]) -> Option<DistanceSummary> {
+    let mut sum = 0.0;
+    let mut max = f64::NEG_INFINITY;
+    let mut measured_secs = 0usize;
+    for d in samples.iter().flatten() {
+        sum += *d;
+        max = max.max(*d);
+        measured_secs += 1;
+    }
+    if measured_secs == 0 {
+        return None;
+    }
+    Some(DistanceSummary {
+        avg: sum / measured_secs as f64,
+        max,
+        measured_secs,
+        total_secs: samples.len(),
+    })
 }

@@ -24,8 +24,16 @@ pub struct SkillEntry {
 /// `catalogs.skills` at projection time and is empty only for an id the
 /// catalog has no entry for at all -- rare, and "Skill <id>" is a more
 /// honest label for it than a blank.
+///
+/// A name that is nothing but digits is rejected too, not just an empty
+/// one. This carries over a rule from the Elite Insights reader
+/// (`ui/pulse.rs::resolve_skill_name`, deleted in the cutover): a
+/// catalog whose "name" for an id is that id -- or any bare number --
+/// has not actually named it, and rendering `12345` as a skill label
+/// reads as a value rather than an identifier. `Skill 12345` at least
+/// says what it is.
 pub fn skill_label(row: &SkillRow) -> String {
-    if row.name.is_empty() {
+    if row.name.is_empty() || row.name.parse::<i64>().is_ok() {
         format!("Skill {}", row.skill_id)
     } else {
         row.name.clone()

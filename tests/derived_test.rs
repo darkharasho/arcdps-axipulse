@@ -35,6 +35,15 @@ fn every_derived_surface_is_populated_for_the_fixture() {
     assert!(!d.dmg_taken_samples.is_empty());
     assert_eq!(d.off_boons.len(), 4);
     assert_eq!(d.def_boons.len(), 4);
+
+    // The distance lane is one entry per second like the others, but its
+    // entries are `Option` -- an unmeasured second must arrive at the UI
+    // as absent rather than as a neighbour's value or a zero.
+    assert_eq!(d.distance_samples.len(), (f.duration_ms / 1000) as usize + 1);
+    let summary = arcdps_axipulse::timeline_distance::summarize(&d.distance_samples)
+        .expect("the fixture measures some seconds");
+    assert!(summary.measured_secs <= summary.total_secs);
+    assert!(summary.avg > 0.0 && summary.avg <= summary.max);
 }
 
 /// The fight-composition card must name a Squad group and at least one
