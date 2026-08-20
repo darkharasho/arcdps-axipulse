@@ -14,6 +14,7 @@
 
 #![allow(dead_code)] // Nothing wires this module up until migration Task 7.
 
+use axilog_api::v1::catalogs::Catalogs;
 use axilog_api::v1::entities::Role;
 use axilog_api::v1::envelope::{Coverage, CoverageState};
 use axilog_api::v1::ReportV1;
@@ -121,6 +122,66 @@ pub struct PlayerData {
 
     // -- Contribution (blocks.contribution.by_entity[id]) --
     pub down_contribution: u64,
+
+    // -- Per-skill distributions --
+    /// `blocks.damage.by_entity[id].by_skill`. Sparse -- only skills that
+    /// dealt damage appear.
+    pub damage_by_skill: Vec<SkillRow>,
+    /// `blocks.contribution.by_entity[id].downs_contribution_by_skill`.
+    /// Deliberately UNGATED relative to `damage_by_skill`: the contribution
+    /// pass is always-on (never rides `--skill-damage`), so this reads
+    /// straight off `contribution` without checking the skill-damage
+    /// suboption the damage/healing rows below depend on. See
+    /// `ContributionEntity::downs_contribution_by_skill`'s own doc comment
+    /// for why it lives off `contribution` rather than joined onto
+    /// `damage_by_skill`.
+    pub down_contribution_by_skill: Vec<SkillRow>,
+    /// `blocks.healing.by_entity[id].detail.by_skill`. Empty when
+    /// `healing_available` is `false` (this log has no healing addon data)
+    /// or when this player has no healing row at all.
+    pub healing_by_skill: Vec<SkillRow>,
+    /// `blocks.healing.by_entity[id].detail.barrier_by_skill`. Same
+    /// availability caveats as `healing_by_skill`.
+    pub barrier_by_skill: Vec<SkillRow>,
+}
+
+/// One skill's contribution to one of `PlayerData`'s four per-skill
+/// distributions (damage/down-contribution/healing/barrier).
+///
+/// `name`/`icon` are resolved here, at build time, against
+/// `ReportV1::catalogs` -- this format's rule that no human-readable name
+/// appears outside `catalogs`/`entities` means every OTHER consumer of
+/// this row would otherwise have to carry the catalog around just to
+/// render it. `icon` stays `Option` (a small, already-diagnosed set of
+/// skill ids has no art in axilog's catalog yet -- an upstream gap, not a
+/// bug in this projection); `name` does not, because the catalog's own
+/// invariant ("every id any row references resolves to an entry") means a
+/// name is always resolvable for an id these rows actually reference.
+///
+/// `hits` and `downed` mean different things depending on which
+/// distribution a row came from -- neither native source this struct
+/// draws from carries a "hits and downed, always" pair:
+/// - `damage_by_skill`: `hits` is the native `SkillRow::hits` contributing
+///   count; `downed` has no native per-skill equivalent for damage, so it
+///   is always `0`.
+/// - `down_contribution_by_skill`: the native source is a bare
+///   `BTreeMap<u32, u64>` (skill id -> credited damage), with no hit count
+///   or downed-subset of its own; both `hits` and `downed` are `0`.
+/// - `healing_by_skill` / `barrier_by_skill`: `hits` is the native
+///   `HealSkillRow::hits` count and `downed` is `HealSkillRow::total_downed`
+///   (healing/barrier landed while the target was downed). Per
+///   `HealSkillRow::total_downed`'s own doc comment this is always `0` on
+///   a barrier row -- GW2EI's barrier distribution has no downed field to
+///   measure it from at all -- so `barrier_by_skill` rows carry `downed:
+///   0` structurally, not because this projection dropped anything.
+#[derive(Debug, Clone)]
+pub struct SkillRow {
+    pub skill_id: u32,
+    pub name: String,
+    pub icon: Option<String>,
+    pub total: u64,
+    pub hits: u32,
+    pub downed: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +294,66 @@ impl FightData {
                         down_contribution: contrib
                             .map(|c| c.downs_contribution.damage)
                             .unwrap_or_default(),
+
+                        // `by_skill`/`detail` are `Option` because they
+                        // ride the crate's OWN `skill_damage` ParseOpts
+                        // suboption, not `r.coverage` -- there is no
+                        // `BlockName` for it to gate on, so `require`'s
+                        // coverage-map check does not apply here. Under
+                        // this crate's fixed `PARSE_OPTS`
+                        // (`tests/common/mod.rs`, `skill_damage: true`)
+                        // both are always `Some`; `.unwrap_or_default()`
+                        // degrades to an empty `Vec` rather than panicking
+                        // if that ever changes, since an empty per-skill
+                        // breakdown is a defensible fallback (unlike a
+                        // silently-zeroed scalar) and this projection has
+                        // no coverage signal to check instead.
+                        damage_by_skill: dmg
+                            .and_then(|d| d.by_skill.as_ref())
+                            .map(|by_skill| {
+                                skill_rows(
+                                    by_skill.iter().map(|(id, row)| {
+                                        (*id, row.total, row.hits.unwrap_or_default(), 0)
+                                    }),
+                                    &r.catalogs,
+                                )
+                            })
+                            .unwrap_or_default(),
+
+                        down_contribution_by_skill: contrib
+                            .map(|c| {
+                                skill_rows(
+                                    c.downs_contribution_by_skill
+                                        .iter()
+                                        .map(|(id, total)| (*id, *total, 0, 0)),
+                                    &r.catalogs,
+                                )
+                            })
+                            .unwrap_or_default(),
+
+                        healing_by_skill: heal
+                            .and_then(|h| h.detail.as_ref())
+                            .map(|d| {
+                                skill_rows(
+                                    d.by_skill.iter().map(|(id, row)| {
+                                        (*id, row.total, row.hits, row.total_downed)
+                                    }),
+                                    &r.catalogs,
+                                )
+                            })
+                            .unwrap_or_default(),
+
+                        barrier_by_skill: heal
+                            .and_then(|h| h.detail.as_ref())
+                            .map(|d| {
+                                skill_rows(
+                                    d.barrier_by_skill.iter().map(|(id, row)| {
+                                        (*id, row.total, row.hits, row.total_downed)
+                                    }),
+                                    &r.catalogs,
+                                )
+                            })
+                            .unwrap_or_default(),
                     });
                 }
                 Role::EnemyPlayer => {
@@ -267,6 +388,28 @@ impl FightData {
             healing_available,
         }
     }
+}
+
+/// Joins a `(skill_id, total, hits, downed)` iterator against
+/// `catalogs.skills` to produce `SkillRow`s. Shared by all four of
+/// `PlayerData`'s per-skill distributions -- see `SkillRow`'s own doc
+/// comment for what `hits`/`downed` mean for each caller.
+fn skill_rows(
+    rows: impl Iterator<Item = (u32, u64, u32, u64)>,
+    catalogs: &Catalogs,
+) -> Vec<SkillRow> {
+    rows.map(|(skill_id, total, hits, downed)| {
+        let entry = catalogs.skills.get(&skill_id);
+        SkillRow {
+            skill_id,
+            name: entry.map(|e| e.name.clone()).unwrap_or_default(),
+            icon: entry.and_then(|e| e.icon.clone()),
+            total,
+            hits,
+            downed,
+        }
+    })
+    .collect()
 }
 
 /// Fetches a block this projection needs, panicking when its OWN
