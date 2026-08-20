@@ -9,7 +9,7 @@ use arcdps::imgui::{StyleColor, Ui};
 use once_cell::sync::Lazy;
 
 use crate::derived::Derived;
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subview { Overview, Damage, Support, Defense, Boons }
@@ -39,17 +39,17 @@ const GAP:    f32 = 8.0;
 // --- entry point ---------------------------------------------------------
 
 /// Render the Pulse tab contents (no window — caller owns that).
-pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
+pub fn render_content(ui: &Ui, fight: &FightData, idx: usize, derived: &Derived) {
     render_tab_strip(ui);
     ui.dummy([0.0, 4.0]);
 
     let subview = SUBVIEW.lock().ok().map(|g| *g).unwrap_or(Subview::Overview);
     match subview {
-        Subview::Overview => render_overview(ui, json, idx, derived),
-        Subview::Damage   => render_damage(ui, json, idx, derived),
-        Subview::Support  => render_support(ui, json, idx, derived),
-        Subview::Defense  => render_defense(ui, json, idx),
-        Subview::Boons    => render_boons(ui, json, idx, derived),
+        Subview::Overview => render_overview(ui, fight, idx, derived),
+        Subview::Damage   => render_damage(ui, fight, idx, derived),
+        Subview::Support  => render_support(ui, fight, idx, derived),
+        Subview::Defense  => render_defense(ui, fight, idx),
+        Subview::Boons    => render_boons(ui, fight, idx, derived),
     }
 }
 
@@ -85,10 +85,10 @@ fn render_tab_strip(ui: &Ui) {
 
 // --- subviews ------------------------------------------------------------
 
-fn render_overview(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
+fn render_overview(ui: &Ui, fight: &FightData, idx: usize, derived: &Derived) {
     use crate::pulse_metrics::*;
 
-    let p = &json.players[idx];
+    let p = &fight.players[idx];
     let dmg = damage(p);
     let dps_v = dps_value(p);
     let dc = down_contribution(p);
@@ -122,18 +122,20 @@ fn render_overview(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
         ("DAMAGE TAKEN", ACCENT_DEFEND,
             format_damage(dt),
             derived.rank_damage_taken.map(ordinal)),
+        // `None` means no distance was measured at all -- never a 0,
+        // which would read as "stacked on the tag".
         ("DISTANCE TO TAG", ACCENT_NEUTRAL,
-            if d_to_tag > 0.0 { format!("{:.0}", d_to_tag) } else { "—".into() },
+            d_to_tag.map(|d| format!("{d:.0}")).unwrap_or_else(|| "—".into()),
             None),
     ];
     draw_2col_card_grid(ui, &cells);
     ui.dummy([0.0, 8.0]);
-    render_fight_composition(ui, json, derived);
+    render_fight_composition(ui, derived);
 }
 
-fn render_damage(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
+fn render_damage(ui: &Ui, fight: &FightData, idx: usize, derived: &Derived) {
     use crate::pulse_metrics::*;
-    let p = &json.players[idx];
+    let p = &fight.players[idx];
     let dmg = damage(p);
     let dps_v = dps_value(p);
     let dc = down_contribution(p);
@@ -164,8 +166,10 @@ fn render_damage(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
     for (i, entry) in skills.iter().enumerate() {
         let frac = entry.damage as f32 / max as f32;
         let pct = if total > 0 { entry.damage as f64 / total as f64 * 100.0 } else { 0.0 };
-        let name = resolve_skill_name(json, entry.id, &entry.name);
-        draw_skill_bar(ui, json, i, entry.id, &name, frac, pct, &format_damage(entry.damage));
+        // The name is resolved from `catalogs.skills` at projection
+        // time (`top_skills::skill_label`), so there is no per-frame
+        // skill-map lookup left to do here.
+        draw_skill_bar(ui, fight, i, entry.id, &entry.name, frac, pct, &format_damage(entry.damage));
     }
 }
 
@@ -174,16 +178,21 @@ enum SupportMode { Healing, Downed, Barrier }
 
 static SUPPORT_MODE: Lazy<Mutex<SupportMode>> = Lazy::new(|| Mutex::new(SupportMode::Healing));
 
-fn render_support(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
+fn render_support(ui: &Ui, fight: &FightData, idx: usize, derived: &Derived) {
     use crate::pulse_metrics::*;
 
-    let p = &json.players[idx];
+    let p = &fight.players[idx];
     let st = strips(p);
     let cl = cleanses(p);
     let cl_self = cleanse_self(p);
-    let has_heal = has_healing_data(p);
+    // Log-wide, not per-player: `healing_available` is false when this
+    // LOG was recorded without the arcdps healing addon, in which case
+    // `healing_out`/`barrier_out`/`downed_healing_out` are a structural
+    // zero standing in for "unknown". Showing that zero would claim a
+    // measurement nobody took, so the not-available layout runs instead.
+    let has_heal = fight.healing_available;
     let heal = healing(p);
-    let heal_hps = hps(p);
+    let heal_hps = hps(p, fight.duration_ms);
     let heal_downed = healing_downed(p);
     let barr = barrier(p);
     let inc_heal = incoming_healing(p);
@@ -218,7 +227,7 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
             ("CLEANSES",      ACCENT_CLEANSE, cl.to_string(),      derived.rank_cleanses.map(ordinal)),
             ("SELF CLEANSE",  ACCENT_CLEANSE, cl_self.to_string(), None),
             ("STRIPS / SEC",  ACCENT_SUPPORT,
-                format!("{:.2}", st as f64 / (json.duration_ms.max(1) as f64 / 1000.0)),
+                format!("{:.2}", st as f64 / (fight.duration_ms.max(1) as f64 / 1000.0)),
                 None),
             ("INCOMING HEAL", ACCENT_SUCCESS,
                 "no addon".to_string(), None),
@@ -245,18 +254,18 @@ fn render_support(ui: &Ui, json: &EiJson, idx: usize, derived: &Derived) {
 
     match mode {
         SupportMode::Healing => {
-            render_value_bars(ui, json,
-                &derived.top_healing.iter().map(|s| (s.id, s.healing)).collect::<Vec<_>>(),
+            render_value_bars(ui, fight,
+                &derived.top_healing.iter().map(|s| (s.id, s.name.as_str(), s.healing)).collect::<Vec<_>>(),
                 "heal", [0.40, 0.85, 0.65, 0.55]);
         }
         SupportMode::Downed => {
-            render_value_bars(ui, json,
-                &derived.top_downed_healing.iter().map(|s| (s.id, s.downed_healing)).collect::<Vec<_>>(),
+            render_value_bars(ui, fight,
+                &derived.top_downed_healing.iter().map(|s| (s.id, s.name.as_str(), s.downed_healing)).collect::<Vec<_>>(),
                 "down", [0.97, 0.55, 0.42, 0.55]);
         }
         SupportMode::Barrier => {
-            render_value_bars(ui, json,
-                &derived.top_barrier.iter().map(|s| (s.id, s.barrier)).collect::<Vec<_>>(),
+            render_value_bars(ui, fight,
+                &derived.top_barrier.iter().map(|s| (s.id, s.name.as_str(), s.barrier)).collect::<Vec<_>>(),
                 "barr", [0.65, 0.51, 0.91, 0.55]);
         }
     }
@@ -292,31 +301,30 @@ fn render_support_mode_toggle(ui: &Ui) {
 /// renderer for any non-negative numeric value.
 fn render_value_bars(
     ui: &Ui,
-    json: &EiJson,
-    pairs: &[(i64, u64)],
+    fight: &FightData,
+    rows: &[(u32, &str, u64)],
     id_prefix: &str,
     bar_color: [f32; 4],
 ) {
-    if pairs.is_empty() {
+    if rows.is_empty() {
         ui.text_disabled("No skills recorded.");
         return;
     }
-    let max = pairs.first().map(|p| p.1).unwrap_or(1).max(1);
-    let total: u64 = pairs.iter().map(|p| p.1).sum();
-    for (i, (id, value)) in pairs.iter().enumerate() {
+    let max = rows.first().map(|r| r.2).unwrap_or(1).max(1);
+    let total: u64 = rows.iter().map(|r| r.2).sum();
+    for (i, (id, name, value)) in rows.iter().enumerate() {
         let frac = *value as f32 / max as f32;
         let pct = if total > 0 { *value as f64 / total as f64 * 100.0 } else { 0.0 };
-        let name = resolve_skill_name(json, *id, "");
-        draw_value_bar(ui, json, id_prefix, i, *id, &name, frac, pct, &format_damage(*value), bar_color);
+        draw_value_bar(ui, fight, id_prefix, i, *id, name, frac, pct, &format_damage(*value), bar_color);
     }
 }
 
 fn draw_value_bar(
     ui: &Ui,
-    json: &EiJson,
+    fight: &FightData,
     id_prefix: &str,
     row_idx: usize,
-    id: i64,
+    id: u32,
     name: &str,
     frac: f32,
     pct: f64,
@@ -328,7 +336,7 @@ fn draw_value_bar(
     let row_h = (ui.text_line_height() * 1.55).max(24.0);
     let cursor = ui.cursor_screen_pos();
 
-    let icon = lookup(json, IconKey { kind: IconKind::Skill, id });
+    let icon = lookup(fight, IconKey { kind: IconKind::Skill, id });
 
     {
         let draw = ui.get_window_draw_list();
@@ -378,11 +386,11 @@ fn draw_value_bar(
     ui.invisible_button(format!("##{id_prefix}-{row_idx}-{id}"), [avail, row_h]);
 }
 
-fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {
+fn render_defense(ui: &Ui, fight: &FightData, idx: usize) {
     use crate::pulse_metrics::*;
     use crate::squad_rank::{rank_in_squad, RankMetric};
 
-    let p = &json.players[idx];
+    let p = &fight.players[idx];
     let dt = damage_taken(p);
     let deaths_n = deaths(p);
     let downs_n = downs(p);
@@ -395,7 +403,7 @@ fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {
     let cc_in = incoming_cc(p);
     let strips_in = incoming_strips(p);
 
-    let dt_rank = rank_in_squad(json, idx, RankMetric::DamageTaken);
+    let dt_rank = rank_in_squad(fight, idx, RankMetric::DamageTaken);
     hero_banner(ui,
         "DAMAGE TAKEN", ACCENT_DEFEND,
         &format_damage(dt), "",
@@ -424,7 +432,7 @@ fn render_defense(ui: &Ui, json: &EiJson, idx: usize) {
     draw_2col_card_grid(ui, &mit_cells);
 }
 
-fn render_boons(ui: &Ui, json: &EiJson, _idx: usize, derived: &Derived) {
+fn render_boons(ui: &Ui, fight: &FightData, _idx: usize, derived: &Derived) {
     use crate::boon_uptime::BoonStacking;
 
     if derived.boon_uptimes.is_empty() {
@@ -443,7 +451,7 @@ fn render_boons(ui: &Ui, json: &EiJson, _idx: usize, derived: &Derived) {
                 (f, format!("{:.1}%", boon.uptime))
             }
         };
-        draw_boon_bar(ui, json, boon.id, boon.name, frac, &label, boon_color(boon.name));
+        draw_boon_bar(ui, fight, boon.id, boon.name, frac, &label, boon_color(boon.name));
     }
 }
 
@@ -461,28 +469,6 @@ fn ordinal(n: u32) -> String {
     let suffix = if v >= 20 { s.get(v % 10).copied().unwrap_or("th") }
                  else { s.get(v).copied().unwrap_or("th") };
     format!("{n}{suffix}")
-}
-
-/// Look up a skill's display name in the EI top-level `skill_map`,
-/// falling back to `buff_map` (condi/boon damage entries — e.g.
-/// Burning, Bleeding — have buff IDs, not skill IDs). EI emits
-/// `totalDamageDist[].name` empty in WvW so these maps are the
-/// authoritative source. Final fallback is "Skill <id>".
-fn resolve_skill_name(json: &EiJson, id: i64, fallback: &str) -> String {
-    if !fallback.is_empty() && fallback.parse::<i64>().is_err() {
-        return fallback.to_string();
-    }
-    if let Some(entry) = json.skill_map.get(&format!("s{id}")) {
-        if !entry.name.is_empty() && entry.name.parse::<i64>().is_err() {
-            return entry.name.clone();
-        }
-    }
-    if let Some(entry) = json.buff_map.get(&format!("b{id}")) {
-        if !entry.name.is_empty() && entry.name.parse::<i64>().is_err() {
-            return entry.name.clone();
-        }
-    }
-    format!("Skill {id}")
 }
 
 fn section_label(ui: &Ui, label: &str) {
@@ -603,9 +589,9 @@ fn draw_2col_card_grid(
 /// percentage, and right-aligned damage value.
 fn draw_skill_bar(
     ui: &Ui,
-    json: &EiJson,
+    fight: &FightData,
     row_idx: usize,
-    id: i64,
+    id: u32,
     name: &str,
     frac: f32,
     pct: f64,
@@ -615,7 +601,7 @@ fn draw_skill_bar(
     let avail = ui.content_region_avail()[0].max(120.0);
     let row_h = (ui.text_line_height() * 1.55).max(24.0);
     let cursor = ui.cursor_screen_pos();
-    let icon = lookup(json, IconKey { kind: IconKind::Skill, id });
+    let icon = lookup(fight, IconKey { kind: IconKind::Skill, id });
 
     {
         let draw = ui.get_window_draw_list();
@@ -685,12 +671,12 @@ fn boon_color(name: &str) -> [f32; 4] {
     }
 }
 
-fn draw_boon_bar(ui: &Ui, json: &EiJson, id: i64, name: &str, frac: f32, label: &str, color: [f32; 4]) {
+fn draw_boon_bar(ui: &Ui, fight: &FightData, id: u32, name: &str, frac: f32, label: &str, color: [f32; 4]) {
     use crate::ui::icons::{lookup, IconKey, IconKind};
     let avail = ui.content_region_avail()[0].max(120.0);
     let row_h = (ui.text_line_height() * 1.55).max(24.0);
     let cursor = ui.cursor_screen_pos();
-    let icon = lookup(json, IconKey { kind: IconKind::Buff, id });
+    let icon = lookup(fight, IconKey { kind: IconKind::Buff, id });
 
     {
         let draw = ui.get_window_draw_list();
@@ -748,7 +734,7 @@ fn draw_boon_bar(ui: &Ui, json: &EiJson, id: i64, name: &str, frac: f32, label: 
 static COMP_SELECTED: Lazy<Mutex<Option<crate::fight_composition::GroupKey>>> =
     Lazy::new(|| Mutex::new(None));
 
-fn render_fight_composition(ui: &Ui, _json: &EiJson, derived: &Derived) {
+fn render_fight_composition(ui: &Ui, derived: &Derived) {
     let groups = &derived.composition;
     if groups.is_empty() { return; }
     let total: u32 = groups.iter().map(|g| g.count).sum();

@@ -8,44 +8,21 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
 use crate::config::{default_cbtlogs, Config};
-use crate::ei_bundle::{default_install_root, install_from_bytes, BUNDLED_EI_VERSION, BUNDLED_EI_ZIP};
-use crate::ei_parser::{parse_log, ParseError};
-use crate::ei_settings::EiSettings;
 use crate::state::{AppState, FightRecord};
 
 struct Globals {
     state: Mutex<AppState>,
     config: Mutex<Config>,
-    install_root: Mutex<Option<PathBuf>>,
-    settings: Mutex<EiSettings>,
 }
 
 static G: Lazy<Globals> = Lazy::new(|| Globals {
     state: Mutex::new(AppState::new()),
     config: Mutex::new(Config::load()),
-    install_root: Mutex::new(None),
-    settings: Mutex::new(EiSettings::default()),
 });
 
 pub fn init() -> Result<(), Option<String>> {
     let _ = &*G;
     crate::diag::set_enabled(G.config.lock().ok().map(|c| c.debug_logging).unwrap_or(false));
-
-    let Some(install_root) = default_install_root() else {
-        log::warn!("axipulse init: no install root (LOCALAPPDATA missing); aborting");
-        return Ok(());
-    };
-    if let Err(e) = install_from_bytes(BUNDLED_EI_ZIP, BUNDLED_EI_VERSION, &install_root) {
-        log::warn!("axipulse init: EI extract failed: {e}; subsequent parses will error");
-    } else {
-        log::warn!("axipulse init: EI installed at {install_root:?}");
-    }
-    if let Err(e) = crate::ei_bundle::install_dotnet(&install_root) {
-        log::warn!("axipulse init: .NET extract failed: {e}; EI will not be able to run");
-    } else {
-        log::warn!("axipulse init: .NET 8 runtime installed at {:?}", crate::ei_bundle::dotnet_root(&install_root));
-    }
-    if let Ok(mut slot) = G.install_root.lock() { *slot = Some(install_root); }
 
     let cbtlogs = match G.config.lock().ok().map(|c| c.cbtlogs_path.clone()).filter(|s| !s.is_empty()) {
         Some(s) => Some(PathBuf::from(s)),
@@ -234,13 +211,6 @@ static PARSING_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn is_parsing() -> bool { PARSING_COUNT.load(Ordering::Relaxed) > 0 }
 
-/// Resolved directory the DLL was loaded from. Used by the tile cache
-/// to locate sidecar assets at `<install_root>/axipulse-assets/tiles/`.
-/// Returns `None` until arcdps has told us the install location.
-pub fn install_root() -> Option<std::path::PathBuf> {
-    G.install_root.lock().ok().and_then(|g| g.clone())
-}
-
 /// Directory containing the loaded `arcdps_axipulse.dll` (e.g.
 /// `<gw2>/addons/`). Resolved lazily on first call via the standard
 /// `GetModuleHandleExW(FROM_ADDRESS) + GetModuleFileNameW` Windows
@@ -320,27 +290,52 @@ impl Drop for ParsingGuard {
     }
 }
 
+/// Runs on the `axipulse-parser` thread, once per detected log.
+///
+/// The whole body is inside a `catch_unwind` for the same reason
+/// `parse::parse_log` has one, extended one layer out: `parse_log`'s own
+/// guard ends at `FightData::from_report`, but `Derived::compute` (which
+/// fans out to eleven leaf modules), `wvw_teams::count_teams` and
+/// `push_fight` all run afterwards on this same thread. A panic in any
+/// of them used to unwind the parser thread, which drops the work
+/// receiver; the watcher's next `tx_work.send` then fails and the
+/// watcher thread returns, so NO further log is parsed for the rest of
+/// the GW2 session. Catching here costs one log instead.
 fn on_new_log(path: PathBuf) {
     let label = path.file_stem().and_then(|s| s.to_str()).unwrap_or("(log)").to_string();
     let _parsing = ParsingGuard::new(label);
-    let install_root = match G.install_root.lock().ok().and_then(|g| g.clone()) {
-        Some(r) => r,
-        None => { log::warn!("axipulse: on_new_log fired before install_root set"); return; }
-    };
-    let settings = G.settings.lock().ok().map(|s| s.clone()).unwrap_or_default();
+    // Unwind-safe: everything shared is behind a Mutex (poisoning is
+    // already handled at every lock site here), and the only values
+    // being built are local and dropped on the unwind path.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        on_new_log_inner(path)
+    }));
+    if let Err(payload) = outcome {
+        log::warn!(
+            "axipulse: post-parse processing panicked: {}",
+            crate::parse::panic_message(payload.as_ref()),
+        );
+    }
+}
+
+fn on_new_log_inner(path: PathBuf) {
     log::warn!("axipulse: parsing {path:?}");
-    match parse_log(&install_root, &settings, &path) {
-        Ok(mut json) => {
+    // In-process, no install root and no Elite Insights settings: the
+    // log bytes go straight into axilog and come back as a `FightData`.
+    // The `ReportV1` behind it is dropped inside `parse_log`, so there
+    // is nothing left to slim afterwards either.
+    match crate::parse::parse_log(&path) {
+        Ok(fight) => {
             // Pre-compute everything heavy the UI used to do per frame.
-            let derived = std::sync::Arc::new(crate::derived::Derived::compute(&json));
-            // Derived has consumed the heavy arrays; collapse what the
-            // per-frame accessors still read so the retained record
-            // stays small (see slim.rs — this is the post-fight-lag fix).
-            crate::slim::slim_after_derive(&mut json);
+            let derived = std::sync::Arc::new(crate::derived::Derived::compute(&fight));
+            // `encounter.map` is the map's own name; there is no
+            // "Detailed WvW - " prefix to strip any more.
+            let map = fight.map_name.clone();
+            let counts = crate::wvw_teams::count_teams(&fight);
             let record = FightRecord {
                 log_path: path,
                 parsed_at: std::time::SystemTime::now(),
-                data: json,
+                data: fight,
                 derived,
             };
             log::warn!(
@@ -349,29 +344,16 @@ fn on_new_log(path: PathBuf) {
                 record.data.duration_ms,
                 record.data.players.len(),
             );
-            // EI's WvW fight_name comes through as "Detailed WvW - <Map>";
-            // strip the prefix so the toast reads just "<Map>".
-            let map = record.data.fight_name
-                .strip_prefix("Detailed WvW - ")
-                .unwrap_or(record.data.fight_name.as_str())
-                .to_string();
-            let counts = crate::wvw_teams::count_teams(&record.data);
             let toast = ParsedToast { map, counts };
             let evicted = match G.state.lock() {
                 Ok(mut s) => s.push_fight(record),
                 Err(_) => Vec::new(),
             };
-            // Free the evicted fight's JSON here, outside the lock.
+            // Free the evicted fight here, outside the lock.
             drop(evicted);
             if let Ok(mut g) = LAST_PARSED.lock() {
                 *g = Some((toast, std::time::Instant::now()));
             }
-            // Arm 120 frames (~2s @ 60fps) of trace output so we can
-            // pinpoint where the host crashes when a new fight first
-            // renders.
-        }
-        Err(ParseError::SubprocessExit { code, stderr }) => {
-            log::warn!("axipulse: parse failed (code={code:?}): {stderr}");
         }
         Err(e) => log::warn!("axipulse: parse failed: {e}"),
     }

@@ -1,5 +1,22 @@
-use arcdps_axipulse::ei_model::EiJson;
-use arcdps_axipulse::boon_uptime::{collect_uptimes, boon_name, BoonStacking, BoonUptime};
+mod common;
+
+use arcdps_axipulse::boon_uptime::{
+    boon_name, collect_uptimes, parse_stacking, BoonStacking, BoonUptime,
+};
+use arcdps_axipulse::fight_data::{BoonRow, FightData, PlayerData};
+
+/// `stacking` is a native-shaped string ("intensity"/"duration") because
+/// that field, not any table in this crate, is what `collect_uptimes`
+/// reads to decide which number the bar shows.
+fn boon(id: u32, stacking: &str, uptime_pct: f64, avg_stacks: Option<f64>) -> BoonRow {
+    BoonRow {
+        buff_id: id,
+        stacking: stacking.to_string(),
+        uptime_pct,
+        avg_stacks,
+        ..BoonRow::default()
+    }
+}
 
 #[test]
 fn boon_name_returns_known_names() {
@@ -13,50 +30,116 @@ fn boon_name_returns_known_names() {
     assert_eq!(boon_name(999_999), None);
 }
 
+/// Stacking mode now comes from axilog's own per-buff string, not from
+/// a hardcoded id table in this crate. Anything else is `None` rather
+/// than a guessed default -- a guess would misdraw the bar (Ã·25 vs Ã·100)
+/// instead of failing.
 #[test]
-fn boon_name_classifies_stacking() {
-    use arcdps_axipulse::boon_uptime::boon_stacking;
-    assert_eq!(boon_stacking(740), BoonStacking::Intensity);
-    assert_eq!(boon_stacking(1122), BoonStacking::Intensity);
-    assert_eq!(boon_stacking(725), BoonStacking::Duration);
-    assert_eq!(boon_stacking(717), BoonStacking::Duration);
-    assert_eq!(boon_stacking(1187), BoonStacking::Duration);
-    assert_eq!(boon_stacking(30328), BoonStacking::Duration);
-    assert_eq!(boon_stacking(743), BoonStacking::Duration);
+fn stacking_is_parsed_from_the_native_string() {
+    assert_eq!(parse_stacking("intensity"), Some(BoonStacking::Intensity));
+    assert_eq!(parse_stacking("duration"), Some(BoonStacking::Duration));
+    assert_eq!(parse_stacking(""), None);
+    assert_eq!(parse_stacking("Duration"), None);
+    assert_eq!(parse_stacking("stacks"), None);
 }
 
+/// A row whose stacking mode did not resolve is OMITTED: nothing says
+/// whether its number is stacks or a percentage, so there is no honest
+/// bar to draw.
+#[test]
+fn a_row_with_an_unrecognised_stacking_mode_is_omitted() {
+    let p = PlayerData {
+        boons: vec![boon(740, "", 99.0, Some(18.3)), boon(725, "duration", 85.5, None)],
+        ..PlayerData::default()
+    };
+    let ups = collect_uptimes(&p);
+    assert_eq!(ups.len(), 1);
+    assert_eq!(ups[0].id, 725);
+}
+
+/// The bar reads `avg_stacks` or `uptime_pct` according to the ROW, even
+/// when that disagrees with what this crate's WvW table would have
+/// guessed from the id: Might (id 740) is an intensity boon by every
+/// convention, but a row that declares itself `duration` surfaces its
+/// `uptime_pct`. Pins that there is exactly one decider.
+#[test]
+fn the_rows_own_stacking_decides_which_number_surfaces() {
+    let p = PlayerData {
+        boons: vec![boon(740, "duration", 99.0, Some(18.3))],
+        ..PlayerData::default()
+    };
+    let ups = collect_uptimes(&p);
+    assert_eq!(ups[0].stacking, BoonStacking::Duration);
+    assert_eq!(ups[0].uptime, 99.0);
+}
+
+/// An intensity boon reports AVERAGE STACKS and a duration boon reports
+/// PERCENT UPTIME, from two different native fields. Mixing them up
+/// would misdraw the bar (÷25 vs ÷100) rather than fail, so this pins
+/// which field each reads: Might's row below carries an uptime_pct of
+/// 99.0 that must NOT surface, and an avg_stacks of 18.3 that must.
 #[test]
 fn collect_uptimes_returns_known_boons_in_canonical_order() {
-    let j: EiJson = serde_json::from_str(r#"{
-        "fightName":"t","durationMS":1,
-        "players":[{
-            "name":"me","account":":me.1","profession":"Guardian",
-            "buffUptimes":[
-                {"id":725,"buffData":[{"uptime":85.5}]},
-                {"id":740,"buffData":[{"uptime":18.3}]},
-                {"id":999999,"buffData":[{"uptime":50.0}]},
-                {"id":1187,"buffData":[{"uptime":42.1}]}
-            ]
-        }],
-        "targets":[]
-    }"#).unwrap();
-    let ups = collect_uptimes(&j.players[0]);
+    let p = PlayerData {
+        boons: vec![
+            boon(725, "duration", 85.5, None),
+            boon(740, "intensity", 99.0, Some(18.3)),
+            boon(999_999, "duration", 50.0, None),
+            boon(1187, "duration", 42.1, None),
+        ],
+        ..PlayerData::default()
+    };
+    let ups = collect_uptimes(&p);
     assert_eq!(ups.len(), 3);
     assert_eq!(ups[0], BoonUptime { id: 740, name: "Might", uptime: 18.3, stacking: BoonStacking::Intensity });
     assert_eq!(ups[1], BoonUptime { id: 725, name: "Fury", uptime: 85.5, stacking: BoonStacking::Duration });
     assert_eq!(ups[2], BoonUptime { id: 1187, name: "Quickness", uptime: 42.1, stacking: BoonStacking::Duration });
 }
 
+/// An intensity boon whose native `avg_stacks` is absent reports 0.0
+/// stacks. That IS the measurement (the player never held it long enough
+/// to average), not a stand-in for an unknown -- the row's presence is
+/// what says the buff was measured at all.
 #[test]
-fn missing_buff_data_yields_zero_uptime() {
-    let j: EiJson = serde_json::from_str(r#"{
-        "fightName":"t","durationMS":1,
-        "players":[{
-            "name":"me","account":":me.1","profession":"Guardian",
-            "buffUptimes":[{"id":740,"buffData":[]}]
-        }],
-        "targets":[]
-    }"#).unwrap();
-    let ups = collect_uptimes(&j.players[0]);
-    assert_eq!(ups[0].uptime, 0.0);
+fn an_intensity_boon_with_no_average_reports_zero_stacks() {
+    let p = PlayerData { boons: vec![boon(740, "intensity", 0.0, None)], ..PlayerData::default() };
+    assert_eq!(collect_uptimes(&p)[0].uptime, 0.0);
+}
+
+/// A boon the player never held has no row at all and is OMITTED, not
+/// reported as 0%.
+#[test]
+fn a_boon_with_no_row_is_omitted_rather_than_zeroed() {
+    let p = PlayerData { boons: vec![boon(725, "duration", 10.0, None)], ..PlayerData::default() };
+    let ups = collect_uptimes(&p);
+    assert_eq!(ups.len(), 1);
+    assert_eq!(ups[0].id, 725);
+}
+
+/// Through Task 7 every duration boon's uptime on the real fixture was
+/// additionally proved against an Elite Insights equality oracle,
+/// deleted by Task 8 -- the oracle has served its purpose. What remains
+/// native-only: the local player resolves at least one duration boon,
+/// and every uptime lands in the valid `[0, 100]` percent range rather
+/// than a raw, unclamped native value leaking through.
+#[test]
+fn duration_boon_uptimes_are_populated_and_in_range() {
+    let n = common::native();
+    let f = FightData::from_report(&n);
+    let p = &f.players[f.self_idx.expect("fixture resolves a local player")];
+
+    let mut checked = 0;
+    for up in collect_uptimes(p) {
+        if up.stacking != BoonStacking::Duration {
+            continue;
+        }
+        assert!(
+            (0.0..=100.0).contains(&up.uptime),
+            "{} uptime {} out of [0, 100] range",
+            up.name,
+            up.uptime,
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no duration boon resolved -- the check above is vacuous");
 }

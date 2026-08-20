@@ -1,102 +1,94 @@
-//! Per-player Pulse derives. Port of axipulse/src/shared/dashboardMetrics.ts.
-//! Pure functions of an &EiPlayer; never mutate.
+//! Per-player Pulse derives. Pure functions of a `&PlayerData`; never
+//! mutate.
+//!
+//! Most of these are now a straight field read -- the native projection
+//! already did the phase-0 indexing and the `Option` unwrapping the
+//! Elite Insights reader had to do here. The ones that are still
+//! functions either combine two fields (`cleanses`) or have to decide
+//! how to report an ABSENT measurement, which is the only interesting
+//! thing left in this module. Nothing here ever substitutes a zero for
+//! an unknown.
 
-use crate::ei_model::EiPlayer;
+use crate::fight_data::PlayerData;
 
-pub fn damage(p: &EiPlayer) -> u64        { p.dps_all.get(0).map(|d| d.damage).unwrap_or(0) }
-pub fn dps_value(p: &EiPlayer) -> u64     { p.dps_all.get(0).map(|d| d.dps).unwrap_or(0) }
-pub fn breakbar_damage(p: &EiPlayer) -> f64 {
-    p.dps_all.get(0).map(|d| d.breakbar_damage).unwrap_or(0.0)
+pub fn damage(p: &PlayerData) -> u64 { p.damage }
+pub fn dps_value(p: &PlayerData) -> u64 { p.dps }
+pub fn breakbar_damage(p: &PlayerData) -> u64 { p.breakbar_damage }
+
+/// Total cleanses: allies plus self. Native splits the two
+/// (`support.cleanses` counts allies only), matching Elite Insights'
+/// `condiCleanse` / `condiCleanseSelf` pair, so the sum is still the
+/// "cleanses" the Pulse card means.
+pub fn cleanses(p: &PlayerData) -> u64 {
+    u64::from(p.cleanses) + u64::from(p.cleanses_self)
+}
+pub fn cleanse_self(p: &PlayerData) -> u64 { u64::from(p.cleanses_self) }
+pub fn strips(p: &PlayerData) -> u64 { u64::from(p.strips) }
+
+/// Mean distance to the commander over this player's active polls, in
+/// world inches -- or `None` when there is no such measurement.
+///
+/// `None` is NOT zero and must not be rendered as one: it means either
+/// that no commander reference existed for this player's polls or that
+/// the replay pass never ran. `PlayerData::dist_to_com` has already
+/// absorbed Elite Insights' `-1` sentinel, so a negative value can never
+/// reach here.
+pub fn dist_to_tag(p: &PlayerData) -> Option<f32> { p.dist_to_com }
+
+pub fn damage_taken(p: &PlayerData) -> u64 { p.damage_taken }
+pub fn deaths(p: &PlayerData)       -> u32 { p.deaths }
+pub fn downs(p: &PlayerData)        -> u32 { p.downs }
+pub fn dodges(p: &PlayerData)       -> u32 { p.dodges }
+pub fn blocked(p: &PlayerData)      -> u32 { p.blocked }
+pub fn evaded(p: &PlayerData)       -> u32 { p.evaded }
+pub fn missed(p: &PlayerData)       -> u32 { p.missed }
+pub fn invulned(p: &PlayerData)     -> u32 { p.invulned }
+pub fn interrupted(p: &PlayerData)  -> u32 { p.interrupted }
+pub fn incoming_cc(p: &PlayerData)  -> u64 { u64::from(p.incoming_cc) }
+pub fn incoming_strips(p: &PlayerData) -> u64 { u64::from(p.incoming_strips) }
+
+/// `blocks.contribution.by_entity[id].downs_contribution.damage`.
+///
+/// The Elite Insights reader needed a fallback here (`statsAll[0]
+/// .downContribution` came through as 0 on WvW logs, so it re-summed
+/// `totalDamageDist`). The native contribution block is always-on and
+/// always populated, so the fallback is gone rather than kept as dead
+/// code -- see `PlayerData::down_contribution_by_skill`'s doc comment.
+pub fn down_contribution(p: &PlayerData) -> u64 { p.down_contribution }
+
+// --- arcdps healing addon derives ----------------------------------
+//
+// These four are only meaningful when `FightData::healing_available` is
+// true. When it is false they are all a structural 0 standing in for
+// "the log has no healing addon data at all", and the caller must show
+// its not-available treatment instead of the number. The gate is
+// log-wide, not per-player, so it lives on `FightData`, not here.
+
+pub fn healing(p: &PlayerData) -> u64 { p.healing_out }
+
+/// Healing per second over the fight's own duration.
+///
+/// Elite Insights published an `hps` field; axilog does not, because it
+/// is a pure function of the two numbers already on the row. Deriving it
+/// here keeps the single definition of "per second" (fight duration, not
+/// active time) visible instead of trusting two upstreams to agree.
+/// A zero-length fight reports 0 rather than dividing by zero.
+pub fn hps(p: &PlayerData, duration_ms: u64) -> u64 {
+    if duration_ms == 0 { return 0; }
+    (p.healing_out as u128 * 1000 / duration_ms as u128) as u64
 }
 
-pub fn cleanses(p: &EiPlayer) -> u64 {
-    match p.support.get(0) {
-        Some(s) => s.condi_cleanse + s.condi_cleanse_self,
-        None => 0,
-    }
-}
-pub fn cleanse_self(p: &EiPlayer) -> u64 {
-    p.support.get(0).map(|s| s.condi_cleanse_self).unwrap_or(0)
-}
-pub fn strips(p: &EiPlayer) -> u64 {
-    p.support.get(0).map(|s| s.boon_strips).unwrap_or(0)
+pub fn healing_downed(p: &PlayerData) -> u64 { p.downed_healing_out }
+pub fn barrier(p: &PlayerData) -> u64 { p.barrier_out }
+
+/// Total incoming healing: the last bucket of the CUMULATIVE
+/// `healing_received_1s` series, which is what that series' final value
+/// means. Empty series (no healing addon, or no series row) reports 0 --
+/// the caller gates on `FightData::healing_available` before showing it.
+pub fn incoming_healing(p: &PlayerData) -> u64 {
+    p.healing_received_1s.last().copied().unwrap_or(0)
 }
 
-pub fn dist_to_tag(p: &EiPlayer) -> f64 {
-    let s = match p.stats_all.get(0) { Some(s) => s, None => return 0.0 };
-    if s.dist_to_com > 0.0 { s.dist_to_com } else { s.stack_dist }
-}
-
-pub fn damage_taken(p: &EiPlayer) -> u64 { p.defenses.get(0).map(|d| d.damage_taken).unwrap_or(0) }
-pub fn deaths(p: &EiPlayer)       -> u32 { p.defenses.get(0).map(|d| d.dead_count).unwrap_or(0) }
-pub fn downs(p: &EiPlayer)        -> u32 { p.defenses.get(0).map(|d| d.down_count).unwrap_or(0) }
-pub fn dodges(p: &EiPlayer)       -> u32 { p.defenses.get(0).map(|d| d.dodge_count).unwrap_or(0) }
-pub fn blocked(p: &EiPlayer)      -> u32 { p.defenses.get(0).map(|d| d.blocked_count).unwrap_or(0) }
-pub fn evaded(p: &EiPlayer)       -> u32 { p.defenses.get(0).map(|d| d.evaded_count).unwrap_or(0) }
-pub fn missed(p: &EiPlayer)       -> u32 { p.defenses.get(0).map(|d| d.missed_count).unwrap_or(0) }
-pub fn invulned(p: &EiPlayer)     -> u32 { p.defenses.get(0).map(|d| d.invulned_count).unwrap_or(0) }
-pub fn interrupted(p: &EiPlayer)  -> u32 { p.defenses.get(0).map(|d| d.interrupted_count).unwrap_or(0) }
-pub fn incoming_cc(p: &EiPlayer)  -> u64 { p.defenses.get(0).map(|d| d.received_crowd_control).unwrap_or(0) }
-pub fn incoming_strips(p: &EiPlayer) -> u64 { p.defenses.get(0).map(|d| d.boon_strips).unwrap_or(0) }
-
-/// statsAll[0] is authoritative when populated. In WvW EI may aggregate
-/// targets and leave the field at 0; fall back to summing
-/// `downContribution` across totalDamageDist (matches axipulse).
-pub fn down_contribution(p: &EiPlayer) -> u64 {
-    let from_stats = p.stats_all.get(0).map(|s| s.down_contribution).unwrap_or(0);
-    if from_stats > 0 { return from_stats; }
-    p.total_damage_dist.iter().flatten().map(|e| e.down_contribution).sum()
-}
-
-// --- arcdps healing addon derives (Option-guarded — absent when the
-//     player's client didn't have arcdps_healing_stats.dll loaded) ----
-
-pub fn has_healing_data(p: &EiPlayer) -> bool {
-    p.ext_healing_stats.is_some()
-}
-
-pub fn healing(p: &EiPlayer) -> u64 {
-    p.ext_healing_stats.as_ref()
-        .map(|h| h.outgoing_healing_allies.iter()
-            .filter_map(|recip| recip.first().map(|e| e.healing))
-            .sum())
-        .unwrap_or(0)
-}
-
-pub fn hps(p: &EiPlayer) -> u64 {
-    p.ext_healing_stats.as_ref()
-        .map(|h| h.outgoing_healing_allies.iter()
-            .filter_map(|recip| recip.first().map(|e| e.hps))
-            .sum())
-        .unwrap_or(0)
-}
-
-pub fn healing_downed(p: &EiPlayer) -> u64 {
-    p.ext_healing_stats.as_ref()
-        .map(|h| h.outgoing_healing_allies.iter()
-            .filter_map(|recip| recip.first().map(|e| e.downed_healing))
-            .sum())
-        .unwrap_or(0)
-}
-
-pub fn barrier(p: &EiPlayer) -> u64 {
-    p.ext_barrier_stats.as_ref()
-        .map(|h| h.outgoing_barrier_allies.iter()
-            .filter_map(|recip| recip.first().map(|e| e.barrier))
-            .sum())
-        .unwrap_or(0)
-}
-
-pub fn incoming_healing(p: &EiPlayer) -> u64 {
-    p.ext_healing_stats.as_ref()
-        .and_then(|h| h.healing_received_1s.get(0))
-        .and_then(|arr| arr.last().copied())
-        .unwrap_or(0)
-}
-
-pub fn incoming_barrier(p: &EiPlayer) -> u64 {
-    p.ext_barrier_stats.as_ref()
-        .and_then(|h| h.barrier_received_1s.get(0))
-        .and_then(|arr| arr.last().copied())
-        .unwrap_or(0)
+pub fn incoming_barrier(p: &PlayerData) -> u64 {
+    p.barrier_received_1s.last().copied().unwrap_or(0)
 }

@@ -1,10 +1,10 @@
 #![cfg(windows)]
-//! Timeline tab content — six stacked swim-lanes + inspector cards.
+//! Timeline tab content — eight stacked swim-lanes + inspector cards.
 //! Outer window lives in `ui::main`.
 
 use arcdps::imgui::Ui;
 
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 const BG_CARD:       [f32; 4] = [0.085, 0.10,  0.13,  0.95];
 const BG_CARD_BORDER:[f32; 4] = [1.0, 1.0, 1.0, 0.06];
@@ -18,6 +18,8 @@ const COLOR_TAKEN:  [f32; 4] = [0.97, 0.55, 0.42, 1.0];
 const COLOR_DIST:   [f32; 4] = [0.95, 0.75, 0.40, 1.0];
 const COLOR_OFF:    [f32; 4] = [0.42, 0.65, 0.94, 1.0];
 const COLOR_DEF:    [f32; 4] = [0.32, 0.78, 0.92, 1.0];
+const COLOR_HEAL_IN:    [f32; 4] = [0.35, 0.88, 0.62, 1.0];
+const COLOR_BARRIER_IN: [f32; 4] = [0.85, 0.72, 0.32, 1.0];
 
 const LANE_LABEL_W: f32 = 92.0;
 const LANE_PAD_Y:   f32 = 2.0;
@@ -28,23 +30,25 @@ const BOON_GAP:     f32 = 2.0;
 /// Render the Timeline tab contents (no window — caller owns that).
 pub fn render_content(
     ui: &Ui,
-    json: &EiJson,
+    fight: &FightData,
     idx: usize,
     derived: &crate::derived::Derived,
     layers: &mut crate::config::TimelineLayers,
 ) {
     render_layer_toggles(ui, layers);
     ui.separator();
-    render_time_axis(ui, json.duration_ms);
+    render_time_axis(ui, fight.duration_ms);
 
     // All heavy data was pre-computed once when the fight landed.
-    let dur = json.duration_ms;
+    let dur = fight.duration_ms;
     let health    = if layers.health           { derived.health_samples.as_slice() }    else { &[] };
     let dmg_dealt = if layers.damage_dealt     { derived.dmg_dealt_samples.as_slice() } else { &[] };
     let dmg_taken = if layers.damage_taken     { derived.dmg_taken_samples.as_slice() } else { &[] };
     let distance  = if layers.distance_to_tag  { derived.distance_samples.as_slice() }  else { &[] };
     let off: &[_] = if layers.offensive_boons  { derived.off_boons.as_slice() }         else { &[] };
     let def: &[_] = if layers.defensive_boons  { derived.def_boons.as_slice() }         else { &[] };
+    let heal_in: &[u64]    = if layers.incoming_healing { derived.incoming_heal_samples.as_slice() }    else { &[] };
+    let barrier_in: &[u64] = if layers.incoming_barrier { derived.incoming_barrier_samples.as_slice() } else { &[] };
 
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
     let lanes_origin = ui.cursor_screen_pos();
@@ -52,23 +56,39 @@ pub fn render_content(
     let data_w = avail - LANE_LABEL_W;
     let lanes_top_y = lanes_origin[1];
 
+    // Every lane draws `Option<f32>` per second so a lane CAN have gaps;
+    // health, damage dealt and damage taken simply never do -- once
+    // present they are defined for every second of the fight -- so they
+    // wrap in `Some` at the call site rather than each carrying an
+    // Option they would never populate. Health can still be absent for
+    // the WHOLE lane, which is the empty-slice case below.
     if layers.health {
-        let v: Vec<f32> = health.iter().map(|x| *x as f32).collect();
-        draw_area_lane(ui, "Health", COLOR_HEALTH, &v, 100.0);
+        // Empty means the health pass never saw this entity. That is an
+        // absence, not 100% -- see `timeline_health::
+        // sample_health_per_second`.
+        if health.is_empty() {
+            draw_empty_lane(ui, "Health", COLOR_HEALTH, "no health data");
+        } else {
+            let v: Vec<Option<f32>> = health.iter().map(|x| Some(*x as f32)).collect();
+            draw_area_lane(ui, "Health", COLOR_HEALTH, &v, 100.0);
+        }
     }
     if layers.damage_dealt {
-        let v: Vec<f32> = dmg_dealt.iter().map(|x| *x as f32).collect();
+        let v: Vec<Option<f32>> = dmg_dealt.iter().map(|x| Some(*x as f32)).collect();
         draw_area_lane_auto(ui, "Dmg Dealt", COLOR_DMG, &v);
     }
     if layers.damage_taken {
-        let v: Vec<f32> = dmg_taken.iter().map(|x| *x as f32).collect();
+        let v: Vec<Option<f32>> = dmg_taken.iter().map(|x| Some(*x as f32)).collect();
         draw_area_lane_auto(ui, "Dmg Taken", COLOR_TAKEN, &v);
     }
     if layers.distance_to_tag {
-        if distance.is_empty() {
+        // `all(is_none)` is true for an empty slice too, so this covers
+        // both "no commander at all" and "a lane that never resolved a
+        // single second".
+        if distance.iter().all(Option::is_none) {
             draw_empty_lane(ui, "Dist Tag", COLOR_DIST, "no commander tagged");
         } else {
-            let v: Vec<f32> = distance.iter().map(|x| *x as f32).collect();
+            let v: Vec<Option<f32>> = distance.iter().map(|d| d.map(|x| x as f32)).collect();
             draw_area_lane_auto(ui, "Dist Tag", COLOR_DIST, &v);
         }
     }
@@ -78,29 +98,57 @@ pub fn render_content(
     if layers.defensive_boons {
         draw_boon_lane(ui, "Def Boons", COLOR_DEF, &def, dur);
     }
+    // Absent for the WHOLE lane (not one gap at a time) when the log has
+    // no healing addon data or this player has no series row -- see
+    // `Derived::incoming_heal_samples`'s doc comment. An empty slice is
+    // that absence; a non-empty slice of zeros is a real "received
+    // nothing" measurement and draws as a flat lane, same as any other
+    // area lane would.
+    if layers.incoming_healing {
+        if heal_in.is_empty() {
+            let reason = if fight.healing_available { "no data" } else { "no healing addon" };
+            draw_empty_lane(ui, "Heal In", COLOR_HEAL_IN, reason);
+        } else {
+            let v: Vec<Option<f32>> = heal_in.iter().map(|x| Some(*x as f32)).collect();
+            draw_area_lane_auto(ui, "Heal In", COLOR_HEAL_IN, &v);
+        }
+    }
+    if layers.incoming_barrier {
+        if barrier_in.is_empty() {
+            let reason = if fight.healing_available { "no data" } else { "no healing addon" };
+            draw_empty_lane(ui, "Barrier In", COLOR_BARRIER_IN, reason);
+        } else {
+            let v: Vec<Option<f32>> = barrier_in.iter().map(|x| Some(*x as f32)).collect();
+            draw_area_lane_auto(ui, "Barrier In", COLOR_BARRIER_IN, &v);
+        }
+    }
 
     let lanes_bottom_y = ui.cursor_screen_pos()[1];
     draw_hover_crosshair(
         ui, data_x, data_w, lanes_top_y, lanes_bottom_y, dur,
         layers, &health, &dmg_dealt, &dmg_taken, &distance, &off, &def,
+        heal_in, barrier_in,
     );
 
     ui.dummy([0.0, 6.0]);
-    render_inspector(ui, json, idx, derived);
+    render_inspector(ui, fight, idx, derived);
 }
 
 fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
-    let pairs: [(&str, &mut bool); 6] = [
+    let pairs: [(&str, &mut bool); 8] = [
         ("Health",     &mut layers.health),
         ("Dmg Dealt",  &mut layers.damage_dealt),
         ("Dmg Taken",  &mut layers.damage_taken),
         ("Dist Tag",   &mut layers.distance_to_tag),
         ("Off Boons",  &mut layers.offensive_boons),
         ("Def Boons",  &mut layers.defensive_boons),
+        ("Heal In",    &mut layers.incoming_healing),
+        ("Barrier In", &mut layers.incoming_barrier),
     ];
+    let n = pairs.len();
     for (i, (label, value)) in pairs.into_iter().enumerate() {
         ui.checkbox(label, value);
-        if i + 1 < 6 { ui.same_line(); }
+        if i + 1 < n { ui.same_line(); }
     }
 }
 
@@ -136,9 +184,11 @@ fn draw_hover_crosshair(
     health: &[f64],
     dmg_dealt: &[u64],
     dmg_taken: &[u64],
-    distance: &[f64],
+    distance: &[Option<f64>],
     off: &[crate::timeline_boons::BoonSeries],
     def: &[crate::timeline_boons::BoonSeries],
+    heal_in: &[u64],
+    barrier_in: &[u64],
 ) {
     if !ui.is_mouse_hovering_rect([data_x, top_y], [data_x + data_w, bottom_y]) {
         return;
@@ -176,9 +226,15 @@ fn draw_hover_crosshair(
             rows.push(("Dmg Taken", COLOR_TAKEN, short_value(dmg_taken[i])));
         }
     }
-    if layers.distance_to_tag && !distance.is_empty() {
+    if layers.distance_to_tag && !distance.iter().all(Option::is_none) {
         if let Some(i) = sample_idx(distance.len()) {
-            rows.push(("Dist Tag", COLOR_DIST, format!("{:.0}", distance[i])));
+            // An unmeasured second reads as absent, not as a number
+            // carried over from a second that was measured.
+            let label = match distance[i] {
+                Some(d) => format!("{d:.0}"),
+                None => "—".to_string(),
+            };
+            rows.push(("Dist Tag", COLOR_DIST, label));
         }
     }
     if layers.offensive_boons {
@@ -194,6 +250,16 @@ fn draw_hover_crosshair(
             .map(|s| s.name).collect();
         let label = if active.is_empty() { "none".to_string() } else { active.join(", ") };
         rows.push(("Def Boons", COLOR_DEF, label));
+    }
+    if layers.incoming_healing && !heal_in.is_empty() {
+        if let Some(i) = sample_idx(heal_in.len()) {
+            rows.push(("Heal In", COLOR_HEAL_IN, short_value(heal_in[i])));
+        }
+    }
+    if layers.incoming_barrier && !barrier_in.is_empty() {
+        if let Some(i) = sample_idx(barrier_in.len()) {
+            rows.push(("Barrier In", COLOR_BARRIER_IN, short_value(barrier_in[i])));
+        }
     }
 
     draw_tooltip(ui, mouse, t_ms, &rows, data_x, data_w);
@@ -248,12 +314,19 @@ fn draw_tooltip(
     }
 }
 
-fn draw_area_lane_auto(ui: &Ui, label: &str, accent: [f32; 4], samples: &[f32]) {
-    let max = samples.iter().copied().fold(1.0_f32, f32::max);
+fn draw_area_lane_auto(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option<f32>]) {
+    // Scale off the measured values only; an unmeasured second must not
+    // influence the axis any more than it influences the curve.
+    let max = samples.iter().flatten().copied().fold(1.0_f32, f32::max);
     draw_area_lane(ui, label, accent, samples, max);
 }
 
-fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[f32], max: f32) {
+/// `samples[i] == None` is a second with NO value -- the lane leaves a
+/// gap there rather than drawing a baseline zero or bridging the hole
+/// with a straight line between its neighbours. Both would render an
+/// invented measurement; see
+/// `timeline_distance::distance_to_commander_per_second`.
+fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option<f32>], max: f32) {
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
     let cursor = ui.cursor_screen_pos();
     let data_x = cursor[0] + LANE_LABEL_W;
@@ -276,21 +349,25 @@ fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[f32], max: 
         let mut fill = accent; fill[3] = 0.50;
         let baseline = y + h - 2.0;
         let usable_h = h - 4.0;
-        let sample_at = |x_frac: f32| -> f32 {
-            if n == 1 { return (samples[0] / max).clamp(0.0, 1.0); }
+        let norm = |v: Option<f32>| -> Option<f32> { v.map(|x| (x / max).clamp(0.0, 1.0)) };
+        // `None` when either bracketing sample is absent: a column
+        // straddling the edge of a gap has no honest value to show, so
+        // it is left empty rather than half-interpolated.
+        let sample_at = |x_frac: f32| -> Option<f32> {
+            if n == 1 { return norm(samples[0]); }
             let f = x_frac * (n - 1) as f32;
             let i0 = (f as usize).min(n - 1);
             let i1 = (i0 + 1).min(n - 1);
             let t = f - i0 as f32;
-            let v0 = (samples[i0] / max).clamp(0.0, 1.0);
-            let v1 = (samples[i1] / max).clamp(0.0, 1.0);
-            v0 + (v1 - v0) * t
+            let v0 = norm(samples[i0])?;
+            let v1 = norm(samples[i1])?;
+            Some(v0 + (v1 - v0) * t)
         };
         let cols = data_w.floor() as i32;
         for c in 0..cols {
             let x0 = data_x + c as f32;
             let x1 = x0 + 1.0;
-            let v = sample_at((c as f32 + 0.5) / cols as f32);
+            let Some(v) = sample_at((c as f32 + 0.5) / cols as f32) else { continue };
             let top = y + h - v * usable_h - 2.0;
             if baseline - top < 0.5 { continue; }
             // Overlap by 0.5px to prevent hairline gaps between columns
@@ -298,13 +375,16 @@ fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[f32], max: 
             draw.add_rect([x0, top], [x1 + 0.5, baseline], fill).filled(true).build();
         }
         // Outline traces the actual samples so the curve reads as a line.
+        // A segment with an absent endpoint is skipped, so the line
+        // breaks at a gap instead of leaping across it.
         if n >= 2 {
             let step = data_w / (n - 1) as f32;
             for i in 1..n {
+                let (Some(va), Some(vb)) = (norm(samples[i - 1]), norm(samples[i])) else {
+                    continue;
+                };
                 let xa = data_x + step * (i - 1) as f32;
                 let xb = data_x + step * i as f32;
-                let va = (samples[i - 1] / max).clamp(0.0, 1.0);
-                let vb = (samples[i]     / max).clamp(0.0, 1.0);
                 let ya = y + h - va * usable_h - 2.0;
                 let yb = y + h - vb * usable_h - 2.0;
                 draw.add_line([xa, ya], [xb, yb], accent).thickness(1.1).build();
@@ -384,27 +464,21 @@ fn draw_boon_lane(
 
 // --- inspector cards under the timeline ---------------------------------
 
-fn render_inspector(ui: &Ui, json: &EiJson, idx: usize, derived: &crate::derived::Derived) {
+fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::derived::Derived) {
     use crate::pulse_metrics::*;
 
-    let p = &json.players[idx];
-    let ending_hp = p.health_percents.last()
-        .and_then(|pair| pair.get(1).copied())
-        .unwrap_or(100.0);
+    let p = &fight.players[idx];
+    // `None` when the health pass never saw this entity: the card reads
+    // "—" rather than claiming a measured 100%.
+    let ending_hp: Option<f64> = p.health_percents.last().map(|(_, hp)| *hp);
     let deaths_n = deaths(p);
     let downs_n = downs(p);
     let dmg_taken = damage_taken(p);
 
-    let _ = json;
     let boons = &derived.boon_uptimes;
-    let (dist_avg, dist_max) = if derived.distance_samples.is_empty() {
-        (None, None)
-    } else {
-        let sum: f64 = derived.distance_samples.iter().sum();
-        let avg = sum / derived.distance_samples.len() as f64;
-        let max = derived.distance_samples.iter().copied().fold(0.0_f64, f64::max);
-        (Some(avg), Some(max))
-    };
+    // Averages the MEASURED seconds only -- an unmeasured second is not
+    // in the numerator and, crucially, not in the denominator either.
+    let dist = crate::timeline_distance::summarize(&derived.distance_samples);
 
     section_label(ui, "INSPECTOR");
 
@@ -418,7 +492,11 @@ fn render_inspector(ui: &Ui, json: &EiJson, idx: usize, derived: &crate::derived
     let start_y = cursor[1];
 
     let health_lines = vec![
-        ("Ending HP", format!("{:.0}%", ending_hp), if ending_hp <= 0.0 { COLOR_DMG } else { COLOR_HEALTH }),
+        (
+            "Ending HP",
+            ending_hp.map_or_else(|| "—".to_string(), |hp| format!("{hp:.0}%")),
+            if ending_hp.is_some_and(|hp| hp <= 0.0) { COLOR_DMG } else { COLOR_HEALTH },
+        ),
         ("Deaths",    deaths_n.to_string(),         if deaths_n == 0 { COLOR_HEALTH } else { COLOR_DMG }),
         ("Downs",     downs_n.to_string(),          if downs_n  == 0 { COLOR_HEALTH } else { COLOR_TAKEN }),
         ("Dmg Taken", short_value(dmg_taken),       COLOR_TAKEN),
@@ -439,12 +517,29 @@ fn render_inspector(ui: &Ui, json: &EiJson, idx: usize, derived: &crate::derived
     }
     draw_inspector_card(ui, start_x + col_w + gap, start_y, col_w, card_h, "Boon Uptime", COLOR_OFF, &boon_lines);
 
-    let pos_lines = match (dist_avg, dist_max) {
-        (Some(a), Some(m)) => vec![
-            ("Avg distance", format!("{:.0}", a), COLOR_DIST),
-            ("Max distance", format!("{:.0}", m), COLOR_DIST),
-        ],
-        _ => vec![("Distance", "no tag".to_string(), TEXT_MUTED)],
+    let pos_lines = match dist {
+        Some(d) => {
+            let mut lines = vec![
+                ("Avg distance", format!("{:.0}", d.avg), COLOR_DIST),
+                ("Max distance", format!("{:.0}", d.max), COLOR_DIST),
+            ];
+            if d.is_partial() {
+                // Say so on the card. An average over two thirds of a
+                // fight looks identical to an average over all of it
+                // unless the coverage is on screen next to it.
+                // Raw second counts, not m:ss. A lane missing its final
+                // second would render as "2:18 of 2:18" once m:ss
+                // rounds, which reads as full coverage -- the exact
+                // impression this note exists to prevent.
+                lines.push((
+                    "Measured",
+                    format!("{}s of {}s", d.measured_secs, d.total_secs),
+                    TEXT_MUTED,
+                ));
+            }
+            lines
+        }
+        None => vec![("Distance", "no tag".to_string(), TEXT_MUTED)],
     };
     draw_inspector_card(ui, start_x + (col_w + gap) * 2.0, start_y, col_w, card_h, "Position", COLOR_DIST, &pos_lines);
 

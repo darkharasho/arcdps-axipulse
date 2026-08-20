@@ -1,15 +1,20 @@
 //! Compute Squad / Allies / Enemy-team groupings + per-class breakdowns
-//! from `EiJson`. Pure function; tested on the host.
+//! from `FightData`. Pure function; tested on the host.
 
 use std::collections::HashMap;
 
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GroupKey {
     Squad,
     Allies,
-    Enemy(i64),
+    /// Keyed by axilog's resolved team NAME (`"red"`/`"green"`/`"blue"`/
+    /// `"unknown"`), not by a raw team id -- the native projection never
+    /// carries the id. `"unknown"` is a legitimate key: it groups the
+    /// enemies whose team the log did not identify, which is different
+    /// from having no enemies.
+    Enemy(String),
 }
 
 #[derive(Debug, Clone)]
@@ -22,50 +27,44 @@ pub struct Group {
     pub class_counts: Vec<(String, u32)>,
 }
 
-pub fn compute(json: &EiJson, self_idx: usize) -> Vec<Group> {
-    let self_team = json.players.get(self_idx).and_then(|p| p.team_id);
+pub fn compute(fight: &FightData, self_idx: usize) -> Vec<Group> {
+    let self_team = fight.players.get(self_idx).map(|p| p.team.as_str()).unwrap_or("");
 
     let mut squad_specs: HashMap<String, u32> = HashMap::new();
     let mut ally_specs: HashMap<String, u32> = HashMap::new();
     let mut squad_count = 0u32;
     let mut ally_count = 0u32;
 
-    for p in &json.players {
-        let spec = p.elite_spec.clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| p.profession.clone());
-        if !p.not_in_squad {
+    for p in &fight.players {
+        let spec = if p.elite_spec.is_empty() { p.profession.clone() } else { p.elite_spec.clone() };
+        if p.in_squad {
             squad_count += 1;
             *squad_specs.entry(spec).or_insert(0) += 1;
-        } else if p.team_id == self_team {
+        } else if p.team == self_team {
             ally_count += 1;
             *ally_specs.entry(spec).or_insert(0) += 1;
         }
     }
 
-    // Enemies live in `targets` with `enemy_player == true`. Each enemy
-    // team has its own `team_id`; we group by that and order by count
-    // desc so the larger team gets "T1".
-    let mut enemy_team_specs: HashMap<i64, HashMap<String, u32>> = HashMap::new();
-    for t in &json.targets {
-        if !t.enemy_player { continue; }
-        let Some(tid) = t.team_id else { continue; };
-        if tid == 0 { continue; }
-        if Some(tid) == self_team { continue; }
-        // EI usually leaves enemy `profession` empty. The target's
-        // display name is shaped like "<Spec> <random>" (e.g.
-        // "Tempest pl-1992"), so the first token is a reasonable
-        // best-effort spec label.
-        let spec = t.profession.clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                t.name.split_whitespace().next().unwrap_or("Unknown").to_string()
-            });
-        *enemy_team_specs.entry(tid).or_default().entry(spec).or_insert(0) += 1;
+    // Enemies live in `fight.enemies` (`Role::EnemyPlayer` only -- the
+    // projection already dropped NPCs). Group by resolved team colour
+    // and order by count desc so the larger team gets "T1".
+    let mut enemy_team_specs: HashMap<String, HashMap<String, u32>> = HashMap::new();
+    for e in &fight.enemies {
+        if e.team == self_team { continue; }
+        // Enemy `profession` is usually empty. The display name is
+        // shaped like "<Spec> <random>" (e.g. "Tempest pl-1992"), so the
+        // first token is a reasonable best-effort spec label.
+        let spec = if e.profession.is_empty() {
+            e.name.split_whitespace().next().unwrap_or("Unknown").to_string()
+        } else {
+            e.profession.clone()
+        };
+        *enemy_team_specs.entry(e.team.clone()).or_default().entry(spec).or_insert(0) += 1;
     }
 
-    let mut enemy_team_totals: Vec<(i64, u32)> = enemy_team_specs.iter()
-        .map(|(tid, specs)| (*tid, specs.values().sum()))
+    let mut enemy_team_totals: Vec<(String, u32)> = enemy_team_specs.iter()
+        .map(|(team, specs)| (team.clone(), specs.values().sum()))
         .collect();
     enemy_team_totals.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
@@ -92,19 +91,17 @@ pub fn compute(json: &EiJson, self_idx: usize) -> Vec<Group> {
             class_counts: specs,
         });
     }
-    let enemy_palette = [
-        [0.95, 0.38, 0.38, 1.0],
-        [0.95, 0.55, 0.20, 1.0],
-        [0.86, 0.30, 0.55, 1.0],
-    ];
-    for (i, (tid, count)) in enemy_team_totals.into_iter().enumerate() {
-        let mut specs: Vec<(String, u32)> = enemy_team_specs.remove(&tid)
+    for (i, (team, count)) in enemy_team_totals.into_iter().enumerate() {
+        let mut specs: Vec<(String, u32)> = enemy_team_specs.remove(&team)
             .unwrap_or_default().into_iter().collect();
         specs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         groups.push(Group {
-            key: GroupKey::Enemy(tid),
+            // The enemy team's own colour now that axilog resolves it --
+            // the old rotating red/orange/pink palette existed only
+            // because an EI team id carried no colour.
+            color: crate::wvw_teams::team_color(&team).rgba(),
             label: format!("Enemy T{}", i + 1),
-            color: enemy_palette[i.min(enemy_palette.len() - 1)],
+            key: GroupKey::Enemy(team),
             count,
             class_counts: specs,
         });

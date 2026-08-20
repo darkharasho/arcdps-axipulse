@@ -10,3 +10,6 @@ graphify-out/
 
 # Superpowers-managed isolated workspaces
 .worktrees/
+
+# Superpowers SDD scratch workspaces
+.superpowers/

@@ -1,16 +1,17 @@
-//! Per-fight derived data — every expensive walk over EI JSON the UI
-//! used to do every frame is computed exactly once here (on the parser
-//! worker thread, right after EI returns) and stored on `FightRecord`
-//! behind an `Arc`. Render paths become cheap reads.
+//! Per-fight derived data — every expensive walk over the parsed fight
+//! the UI used to do every frame is computed exactly once here (on the
+//! parser worker thread, right after the parse returns) and stored on
+//! `FightRecord` behind an `Arc`. Render paths become cheap reads.
 //!
 //! All fields are public so callers can read them without methods.
 
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 #[derive(Debug, Default)]
 pub struct Derived {
-    /// Resolved local-player index, or `None` if EI's `recordedAccountBy`
-    /// didn't match any player.
+    /// Resolved local-player index, copied from `FightData::self_idx`
+    /// (`encounter.recorded_by` joined onto the roster). `None` when the
+    /// recorder is not a roster entity.
     pub self_idx: Option<usize>,
 
     // --- Pulse Overview / Damage / Support squad ranks --------------
@@ -34,39 +35,58 @@ pub struct Derived {
     pub boon_uptimes: Vec<crate::boon_uptime::BoonUptime>,
 
     // --- Timeline lane samples --------------------------------------
+    /// Health percent per second. Empty -- for the WHOLE lane, not one
+    /// gap at a time -- when the health pass never saw this entity, so
+    /// the Timeline draws it with `draw_empty_lane`. It is never filled
+    /// with 100%: an unmeasured lane must not read like a measured one.
     pub health_samples:    Vec<f64>,
     pub dmg_dealt_samples: Vec<u64>,
     pub dmg_taken_samples: Vec<u64>,
-    pub distance_samples:  Vec<f64>,
+    /// Distance to the commander, one entry per second. `None` is a
+    /// second that was NOT measured -- see
+    /// `timeline_distance::distance_to_commander_per_second`. Never
+    /// filled in with a neighbouring value or a zero.
+    pub distance_samples:  Vec<Option<f64>>,
     pub off_boons:         Vec<crate::timeline_boons::BoonSeries>,
     pub def_boons:         Vec<crate::timeline_boons::BoonSeries>,
+    /// Incoming healing/barrier per second. Empty -- for the WHOLE
+    /// lane, not one gap at a time -- when the log has no healing addon
+    /// data (`FightData::healing_available == false`) or this player
+    /// has no series row; see
+    /// `timeline_buckets::extract_incoming_healing`'s doc comment. The
+    /// Timeline draws the whole-lane-absent case with `draw_empty_lane`,
+    /// same as it already does for `distance_samples` with no commander.
+    pub incoming_heal_samples:    Vec<u64>,
+    pub incoming_barrier_samples: Vec<u64>,
 }
 
 impl Derived {
-    pub fn compute(json: &EiJson) -> Self {
+    pub fn compute(fight: &FightData) -> Self {
         use crate::boon_uptime::collect_uptimes;
         use crate::fight_composition::compute as compute_comp;
-        use crate::self_identify::find_self_index;
         use crate::squad_rank::{rank_in_squad, RankMetric};
         use crate::timeline_boons::{defensive_boons, offensive_boons};
-        use crate::timeline_buckets::{extract_damage_dealt, extract_damage_taken};
+        use crate::timeline_buckets::{
+            extract_damage_dealt, extract_damage_taken,
+            extract_incoming_barrier, extract_incoming_healing,
+        };
         use crate::timeline_distance::distance_to_commander_per_second;
         use crate::timeline_health::sample_health_per_second;
         use crate::top_heals::{top_barrier, top_downed_healing, top_healing};
         use crate::top_skills::{top_damage, top_down_contribution};
 
-        let self_idx = find_self_index(json);
+        let self_idx = fight.self_idx;
         let mut d = Derived { self_idx, ..Derived::default() };
-        d.composition = compute_comp(json, self_idx.unwrap_or(0));
+        d.composition = compute_comp(fight, self_idx.unwrap_or(0));
 
         let Some(idx) = self_idx else { return d; };
-        let Some(p) = json.players.get(idx) else { return d; };
+        let Some(p) = fight.players.get(idx) else { return d; };
 
-        d.rank_damage            = rank_in_squad(json, idx, RankMetric::Damage);
-        d.rank_down_contribution = rank_in_squad(json, idx, RankMetric::DownContribution);
-        d.rank_strips            = rank_in_squad(json, idx, RankMetric::Strips);
-        d.rank_cleanses          = rank_in_squad(json, idx, RankMetric::Cleanses);
-        d.rank_damage_taken      = rank_in_squad(json, idx, RankMetric::DamageTaken);
+        d.rank_damage            = rank_in_squad(fight, idx, RankMetric::Damage);
+        d.rank_down_contribution = rank_in_squad(fight, idx, RankMetric::DownContribution);
+        d.rank_strips            = rank_in_squad(fight, idx, RankMetric::Strips);
+        d.rank_cleanses          = rank_in_squad(fight, idx, RankMetric::Cleanses);
+        d.rank_damage_taken      = rank_in_squad(fight, idx, RankMetric::DamageTaken);
 
         d.top_damage            = top_damage(p, 8);
         d.top_down_contribution = top_down_contribution(p, 8);
@@ -76,13 +96,15 @@ impl Derived {
 
         d.boon_uptimes = collect_uptimes(p);
 
-        let dur = json.duration_ms;
+        let dur = fight.duration_ms;
         d.health_samples    = sample_health_per_second(p, dur);
         d.dmg_dealt_samples = extract_damage_dealt(p);
         d.dmg_taken_samples = extract_damage_taken(p);
-        d.distance_samples  = distance_to_commander_per_second(json, idx, dur);
+        d.distance_samples  = distance_to_commander_per_second(fight, idx, dur);
         d.off_boons         = offensive_boons(p, dur);
         d.def_boons         = defensive_boons(p, dur);
+        d.incoming_heal_samples    = extract_incoming_healing(p);
+        d.incoming_barrier_samples = extract_incoming_barrier(p);
 
         d
     }

@@ -1,6 +1,6 @@
-//! Extract per-buff active-interval lists from `EiPlayer.buff_uptimes`.
+//! Extract per-buff active-interval lists from `PlayerData::boons`.
 
-use crate::ei_model::EiPlayer;
+use crate::fight_data::PlayerData;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
@@ -10,33 +10,35 @@ pub struct Segment {
 
 #[derive(Debug, Clone)]
 pub struct BoonSeries {
-    pub id: i64,
+    pub id: u32,
     pub name: &'static str,
     pub segments: Vec<Segment>,
 }
 
-const OFFENSIVE_IDS: &[(i64, &str)] = &[
+const OFFENSIVE_IDS: &[(u32, &str)] = &[
     (740,   "Might"),
     (725,   "Fury"),
     (1187,  "Quickness"),
     (30328, "Alacrity"),
 ];
 
-const DEFENSIVE_IDS: &[(i64, &str)] = &[
+const DEFENSIVE_IDS: &[(u32, &str)] = &[
     (717,   "Protection"),
     (26980, "Resistance"),
     (1122,  "Stability"),
     (743,   "Aegis"),
 ];
 
-pub fn active_segments(states: &[Vec<f64>], duration_ms: u64) -> Vec<Segment> {
+/// `states` is `BoonRow::states` -- `(time_ms_from_log_start, stacks)`
+/// transitions. A trailing run that never returns to zero is closed at
+/// `duration_ms`.
+pub fn active_segments(states: &[(u64, i32)], duration_ms: u64) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let mut active_start: Option<u64> = None;
-    for pair in states {
-        if pair.len() < 2 { continue; }
-        let t = pair[0].max(0.0) as u64;
-        let v = pair[1];
-        match (active_start, v > 0.0) {
+    for (t, v) in states {
+        let t = *t;
+        let v = *v;
+        match (active_start, v > 0) {
             (None, true) => active_start = Some(t),
             (Some(start), false) => {
                 out.push(Segment { start_ms: start, end_ms: t });
@@ -51,20 +53,20 @@ pub fn active_segments(states: &[Vec<f64>], duration_ms: u64) -> Vec<Segment> {
     out
 }
 
-fn series_for(p: &EiPlayer, list: &[(i64, &'static str)], duration_ms: u64) -> Vec<BoonSeries> {
+fn series_for(p: &PlayerData, list: &[(u32, &'static str)], duration_ms: u64) -> Vec<BoonSeries> {
     list.iter().map(|(id, name)| {
-        let segments = p.buff_uptimes.iter()
-            .find(|b| b.id == *id)
+        let segments = p.boons.iter()
+            .find(|b| b.buff_id == *id)
             .map(|b| active_segments(&b.states, duration_ms))
             .unwrap_or_default();
         BoonSeries { id: *id, name, segments }
     }).collect()
 }
 
-pub fn offensive_boons(p: &EiPlayer, duration_ms: u64) -> Vec<BoonSeries> {
+pub fn offensive_boons(p: &PlayerData, duration_ms: u64) -> Vec<BoonSeries> {
     series_for(p, OFFENSIVE_IDS, duration_ms)
 }
 
-pub fn defensive_boons(p: &EiPlayer, duration_ms: u64) -> Vec<BoonSeries> {
+pub fn defensive_boons(p: &PlayerData, duration_ms: u64) -> Vec<BoonSeries> {
     series_for(p, DEFENSIVE_IDS, duration_ms)
 }

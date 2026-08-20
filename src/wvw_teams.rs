@@ -1,18 +1,21 @@
-//! WvW team → color mapping + per-color player counts, ported from
-//! axibridge's `src/shared/wvwTeams.ts`.
+//! WvW team colour + per-colour player counts.
 //!
-//! Preferred source: EI's authoritative `wvWMapData` (built from the
-//! arcdps CBTS_WVWTEAMS statechange event), which gives the exact
-//! red/green/blue team ids for the log. Older logs (pre-~May 2026)
-//! lack the event, so we fall back to the well-known fixed team-id
-//! table below.
+//! # The team-id table moved upstream
 //!
-//! Fixed table reconciled from two community tools that predate the
-//! event:
-//!   - Drevarr/EVTC_parser/gw2_data.py
-//!   - Drevarr/GW2_EI_log_combiner/config.py
+//! This module used to carry its own red/green/blue team-id table plus a
+//! preference for Elite Insights' `wvWMapData` (built from the arcdps
+//! CBTS_WVWTEAMS statechange) when the log had one. axilog does exactly
+//! that resolution itself -- `axilog_core::wvw::team_color_with` prefers
+//! the log's own dynamic team ids and falls back to the same fixed
+//! table -- and publishes the ANSWER as `EntityOut::team`, one of
+//! `"red"` / `"green"` / `"blue"` / `"unknown"`.
+//!
+//! Keeping a second copy of that table here would be two tables to drift
+//! apart, so this module now only maps the resolved colour NAME onto the
+//! plugin's palette. `"unknown"` is preserved as its own colour, never
+//! silently folded into one of the three.
 
-use crate::ei_model::{EiJson, WvwMapData};
+use crate::fight_data::FightData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TeamColor {
@@ -21,10 +24,6 @@ pub enum TeamColor {
     Blue,
     Unknown,
 }
-
-const RED_TEAM_IDS: &[i64] = &[697, 705, 706, 707, 882, 885, 886, 2520, 2543];
-const GREEN_TEAM_IDS: &[i64] = &[39, 2739, 2741, 2752, 2763, 2767];
-const BLUE_TEAM_IDS: &[i64] = &[432, 433, 1277, 1282, 1989];
 
 impl TeamColor {
     pub fn label(self) -> &'static str {
@@ -48,25 +47,21 @@ impl TeamColor {
     }
 }
 
-/// Resolve a team id to its color. Prefers the authoritative per-log
-/// map, then the fixed id-table, else Unknown.
-pub fn team_color(team_id: Option<i64>, map: Option<&WvwMapData>) -> TeamColor {
-    let Some(tid) = team_id.filter(|t| *t > 0) else {
-        return TeamColor::Unknown;
-    };
-    if let Some(m) = map {
-        if m.red_team_id > 0 && tid == m.red_team_id { return TeamColor::Red; }
-        if m.green_team_id > 0 && tid == m.green_team_id { return TeamColor::Green; }
-        if m.blue_team_id > 0 && tid == m.blue_team_id { return TeamColor::Blue; }
+/// Maps axilog's resolved team name onto this palette. Any name outside
+/// the three known colours -- including `"unknown"`, the empty string,
+/// and any future value -- is `Unknown`, which the UI renders as its own
+/// grey segment rather than dropping.
+pub fn team_color(team: &str) -> TeamColor {
+    match team {
+        "red" => TeamColor::Red,
+        "green" => TeamColor::Green,
+        "blue" => TeamColor::Blue,
+        _ => TeamColor::Unknown,
     }
-    if RED_TEAM_IDS.contains(&tid) { return TeamColor::Red; }
-    if GREEN_TEAM_IDS.contains(&tid) { return TeamColor::Green; }
-    if BLUE_TEAM_IDS.contains(&tid) { return TeamColor::Blue; }
-    TeamColor::Unknown
 }
 
-/// Everyone in the fight bucketed by team color: allied players from
-/// `players` plus enemy players from `targets`.
+/// Everyone in the fight bucketed by team colour: allied players from
+/// `players` plus enemy players from `enemies`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TeamCounts {
     pub red: u32,
@@ -96,8 +91,11 @@ impl TeamCounts {
     }
 }
 
-pub fn count_teams(json: &EiJson) -> TeamCounts {
-    let map = json.wvw_map_data.as_ref();
+/// `FightData::enemies` is already `Role::EnemyPlayer` only -- NPCs are
+/// dropped by the projection -- so this no longer needs the
+/// `enemy_player` / `is_fake` filtering the Elite Insights `targets`
+/// list required.
+pub fn count_teams(fight: &FightData) -> TeamCounts {
     let mut counts = TeamCounts::default();
     let mut bump = |color: TeamColor| match color {
         TeamColor::Red => counts.red += 1,
@@ -105,12 +103,11 @@ pub fn count_teams(json: &EiJson) -> TeamCounts {
         TeamColor::Blue => counts.blue += 1,
         TeamColor::Unknown => counts.unknown += 1,
     };
-    for p in &json.players {
-        bump(team_color(p.team_id, map));
+    for p in &fight.players {
+        bump(team_color(&p.team));
     }
-    for t in &json.targets {
-        if !t.enemy_player || t.is_fake { continue; }
-        bump(team_color(t.team_id, map));
+    for e in &fight.enemies {
+        bump(team_color(&e.team));
     }
     counts
 }
@@ -119,37 +116,22 @@ pub fn count_teams(json: &EiJson) -> TeamCounts {
 mod tests {
     use super::*;
 
-    fn map(red: i64, green: i64, blue: i64) -> WvwMapData {
-        WvwMapData { red_team_id: red, green_team_id: green, blue_team_id: blue }
+    #[test]
+    fn maps_the_three_known_colour_names() {
+        assert_eq!(team_color("red"), TeamColor::Red);
+        assert_eq!(team_color("green"), TeamColor::Green);
+        assert_eq!(team_color("blue"), TeamColor::Blue);
     }
 
+    /// axilog's own fallback-of-last-resort. It must stay a distinct
+    /// colour: folding it into one of the three would put players on a
+    /// team the log never identified.
     #[test]
-    fn authoritative_map_wins_over_fixed_table() {
-        // 39 is Green in the fixed table, but the log says it's red.
-        let m = map(39, 0, 0);
-        assert_eq!(team_color(Some(39), Some(&m)), TeamColor::Red);
-    }
-
-    #[test]
-    fn falls_back_to_fixed_table() {
-        assert_eq!(team_color(Some(705), None), TeamColor::Red);
-        assert_eq!(team_color(Some(39), None), TeamColor::Green);
-        assert_eq!(team_color(Some(1277), None), TeamColor::Blue);
-        assert_eq!(team_color(Some(123456), None), TeamColor::Unknown);
-    }
-
-    #[test]
-    fn missing_or_nonpositive_ids_are_unknown() {
-        assert_eq!(team_color(None, None), TeamColor::Unknown);
-        assert_eq!(team_color(Some(0), None), TeamColor::Unknown);
-        assert_eq!(team_color(Some(-5), Some(&map(705, 39, 432))), TeamColor::Unknown);
-    }
-
-    #[test]
-    fn zero_slot_in_map_does_not_match() {
-        // red slot is 0 (team absent); a 0 team id must not become Red.
-        let m = map(0, 39, 432);
-        assert_eq!(team_color(Some(0), Some(&m)), TeamColor::Unknown);
+    fn unknown_is_preserved_not_guessed() {
+        assert_eq!(team_color("unknown"), TeamColor::Unknown);
+        assert_eq!(team_color(""), TeamColor::Unknown);
+        assert_eq!(team_color("Red"), TeamColor::Unknown);
+        assert_eq!(team_color("purple"), TeamColor::Unknown);
     }
 
     #[test]
@@ -160,30 +142,5 @@ mod tests {
             vec![(TeamColor::Red, 3), (TeamColor::Blue, 7), (TeamColor::Unknown, 1)],
         );
         assert_eq!(TeamCounts::default().segments(), vec![]);
-    }
-
-    #[test]
-    fn counts_players_and_enemy_players() {
-        let json: EiJson = serde_json::from_str(
-            r#"{
-                "fightName": "Detailed WvW - Eternal Battlegrounds",
-                "durationMS": 1000,
-                "wvWMapData": { "redTeamID": 100, "greenTeamID": 200, "blueTeamID": 300 },
-                "players": [
-                    {"name": "a", "account": "a.1", "profession": "Guardian", "teamID": 200, "wasted": {}},
-                    {"name": "b", "account": "b.1", "profession": "Necromancer", "teamID": 200, "wasted": {}}
-                ],
-                "targets": [
-                    {"name": "Tempest pl-1", "enemyPlayer": true, "teamID": 100},
-                    {"name": "Scrapper pl-2", "enemyPlayer": true, "teamID": 300},
-                    {"name": "Dummy", "enemyPlayer": true, "isFake": true, "teamID": 100},
-                    {"name": "Keep Lord", "enemyPlayer": false, "teamID": 100},
-                    {"name": "Weaver pl-3", "enemyPlayer": true}
-                ]
-            }"#,
-        ).unwrap();
-        let c = count_teams(&json);
-        assert_eq!(c, TeamCounts { red: 1, green: 2, blue: 1, unknown: 1 });
-        assert_eq!(c.total(), 5);
     }
 }

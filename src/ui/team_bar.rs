@@ -44,8 +44,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     // The viewer's own team, for the legend "you" marker.
     let self_color = fight.and_then(|f| {
         let idx = f.derived.self_idx?;
-        let tid = f.data.players.get(idx)?.team_id;
-        Some(team_color(tid, f.data.wvw_map_data.as_ref()))
+        Some(team_color(&f.data.players.get(idx)?.team))
     });
 
     let style_tokens = [
@@ -81,14 +80,9 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         match counts {
             Some(c) if c.total() > 0 => {
                 if !compact {
-                    let map = fight
-                        .map(|f| {
-                            f.data.fight_name
-                                .strip_prefix("Detailed WvW - ")
-                                .unwrap_or(f.data.fight_name.as_str())
-                                .to_uppercase()
-                        })
-                        .unwrap_or_default();
+                    // `encounter.map` carries no "Detailed WvW - "
+                    // prefix, unlike EI's `fightName`.
+                    let map = fight.map(|f| f.data.map_name.to_uppercase()).unwrap_or_default();
                     draw_header(ui, &map, c.total());
                 }
                 draw_bar(ui, c, compact);
