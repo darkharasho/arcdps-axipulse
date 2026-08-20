@@ -17,6 +17,7 @@
 use axilog_api::v1::catalogs::Catalogs;
 use axilog_api::v1::entities::Role;
 use axilog_api::v1::envelope::{Coverage, CoverageState};
+use axilog_api::v1::series::SeriesOut;
 use axilog_api::v1::ReportV1;
 use std::collections::HashMap;
 
@@ -143,6 +144,136 @@ pub struct PlayerData {
     /// `blocks.healing.by_entity[id].detail.barrier_by_skill`. Same
     /// availability caveats as `healing_by_skill`.
     pub barrier_by_skill: Vec<SkillRow>,
+
+    // -- Boons (blocks.boons.by_entity[id]) --
+    /// One row per buff this player ever held, in the native map's key
+    /// order (ascending buff id). Empty when this player has no boon row
+    /// at all -- a measured "held nothing", per the block-vs-row
+    /// distinction `require`'s doc comment draws (`blocks.boons` itself
+    /// is always-on, see `require`'s call site below).
+    ///
+    /// `name`/`stacking` are resolved here, at build time, against
+    /// `ReportV1::catalogs.buffs` -- the same reason `SkillRow` resolves
+    /// its own name/icon here rather than making every later consumer
+    /// (boon_uptime.rs/timeline_boons.rs, Task 7) carry the catalog
+    /// around just to render a row.
+    pub boons: Vec<BoonRow>,
+
+    // -- Per-second series (blocks.series.by_entity[id]) --
+    /// Cumulative outgoing damage per second, on the CEILING grid
+    /// (`timeseries::ei_grid` -- one bucket longer than
+    /// `timeline.resolution_ms`'s floor grid on a partial-second log).
+    /// `blocks.series.by_entity[id].damage`, decoded with
+    /// [`decode_series`]. Empty when this player has no series row.
+    pub damage_1s: Vec<u64>,
+    /// Cumulative incoming damage per second, same grid.
+    /// `blocks.series.by_entity[id].damage_taken`.
+    pub damage_taken_1s: Vec<u64>,
+    /// Cumulative INCOMING healing per second from the arcdps healing
+    /// addon, ally-attributed. `blocks.series.by_entity[id]
+    /// .healing_received_1s` -- `Option<SeriesOut>`, gated the same way
+    /// `healing_out` is (see [`FightData::healing_available`]): empty
+    /// when this log has no healing extension data, OR when this player
+    /// has no series row at all. New in axilog 1.1.0.
+    pub healing_received_1s: Vec<u64>,
+    /// Cumulative INCOMING barrier per second, same grid and gate as
+    /// `healing_received_1s`. New in axilog 1.1.0.
+    pub barrier_received_1s: Vec<u64>,
+    /// `(time_ms_from_log_start, health_percent)` step-function pairs --
+    /// NOT a [`SeriesOut`] (see `EntitySeries::health_percents`'s own doc
+    /// comment on the native side for why: it is keyed off
+    /// `HEALTH_UPDATE` events at their own timestamps, not resampled onto
+    /// a fixed grid). Empty when the pass never saw a `HEALTH_UPDATE` for
+    /// this player, which native and this projection both treat as
+    /// distinct from "saw one, no transitions" (`Some(vec![])`, which
+    /// this projection cannot currently distinguish from "absent" either
+    /// -- both collapse to an empty `Vec` here, since `PlayerData` has no
+    /// spare `Option` to carry the difference through and no consumer
+    /// this task knows of needs it).
+    pub health_percents: Vec<(u64, f64)>,
+}
+
+/// One buff row on [`PlayerData::boons`].
+///
+/// Mirrors `axilog_api::v1::blocks::support::BoonRow` field-for-field,
+/// minus `id` (hoisted to `buff_id`, since native keys it as the map key
+/// rather than carrying it on the row) and plus `name`/`stacking`,
+/// resolved from `catalogs.buffs` at projection time for the same reason
+/// [`SkillRow`] resolves its own name here -- see [`PlayerData::boons`]'s
+/// doc comment.
+///
+/// `stacking` is `"intensity"` or `"duration"`, straight from
+/// `BuffEntry::stacking` -- read `avg_stacks` for an intensity buff and
+/// `uptime_pct` for a duration buff, per the brief; this projection does
+/// not infer stacking from the buff id.
+#[derive(Debug, Clone)]
+pub struct BoonRow {
+    pub buff_id: u32,
+    pub name: String,
+    pub stacking: String,
+    pub uptime_pct: f64,
+    /// `None` for a duration buff, or an intensity buff this player never
+    /// held long enough to average -- `BoonRow::avg_stacks` on the native
+    /// side is `Option` for exactly this reason.
+    pub avg_stacks: Option<f64>,
+    pub gen_self: f64,
+    pub gen_group: f64,
+    pub gen_squad: f64,
+    /// This buff's fused stack timeline, `(time_ms_from_log_start,
+    /// stacks)`. Native carries stacks as `u32`
+    /// (`axilog_api::v1::blocks::StateTimeline = Vec<(u64, u32)>`); this
+    /// projection widens to `i32` per this task's own interface contract,
+    /// which is otherwise a lossless cast since a stack count is never
+    /// negative. Empty when `--timeseries` did not run (not the case
+    /// under this crate's fixed `PARSE_OPTS`) or when this buff was never
+    /// held.
+    pub states: Vec<(u64, i32)>,
+}
+
+/// Decodes a native `SeriesOut` into its full-length value array.
+///
+/// `enc: "raw"` is a plain per-bucket array; `enc: "rle"` is
+/// `[value, run_length]` pairs. `len` is documented as the DECODED
+/// length, which need not equal `data.len()` in either encoding -- e.g. a
+/// `raw` series a future encoder change truncated, or a hand-built
+/// `rle` series whose run lengths do not sum to what `len` claims. This
+/// function does not guess which of `len`/`data` is authoritative in that
+/// case: `len` is the format's documented contract
+/// (`axilog_schema::v1::series::SeriesOut`'s own doc comment: "`len` is
+/// the DECODED length in both cases, so a consumer can allocate before
+/// decoding and validate after"), so decoding and checking the result
+/// against `len` is that validation, not an extra opinion this function
+/// adds. A silent truncation or pad would let a caller plot a series
+/// against the wrong number of buckets with no signal that anything was
+/// wrong; panicking is the same "wrong shape is a bug, not data" stance
+/// `require` takes for a missing block.
+pub fn decode_series(s: &SeriesOut) -> Vec<u64> {
+    let out: Vec<u64> = match s.enc {
+        "rle" => {
+            let mut out = Vec::with_capacity(s.len as usize);
+            for pair in &s.data {
+                let value = pair[0].as_u64().unwrap_or_default();
+                let run = pair[1].as_u64().unwrap_or_default();
+                out.extend(std::iter::repeat(value).take(run as usize));
+            }
+            out
+        }
+        _ => s
+            .data
+            .iter()
+            .map(|v| v.as_u64().unwrap_or_default())
+            .collect(),
+    };
+    assert_eq!(
+        out.len() as u64,
+        s.len,
+        "SeriesOut decoded to {} values but its own `len` says expected {} \
+         (enc: {:?}) -- the encoding and the declared length disagree",
+        out.len(),
+        s.len,
+        s.enc,
+    );
+    out
 }
 
 /// One skill's contribution to one of `PlayerData`'s four per-skill
@@ -214,6 +345,21 @@ impl FightData {
         let support = require(&r.blocks.support, "support", &r.coverage);
         let healing = require(&r.blocks.healing, "healing", &r.coverage);
         let contribution = require(&r.blocks.contribution, "contribution", &r.coverage);
+        // `blocks.boons` is a two-gate block (see `BoonRow`'s doc comment
+        // on the native side): `coverage.boons` answers for the UPTIME
+        // half, which is always-on, same as the six blocks above. The
+        // `states`/`per_source` half rides `--timeseries` alone, with no
+        // `BlockName` of its own to gate on -- under this crate's fixed
+        // `PARSE_OPTS` (`timeseries: true`) that half is always populated
+        // too, so `require` on the block as a whole is the right check.
+        let boons = require(&r.blocks.boons, "boons", &r.coverage);
+        // `blocks.series`'s squad rollup is always-on, so its own
+        // coverage entry is a real always-on signal too -- the
+        // `healing_received_1s`/`barrier_received_1s`/`health_percents`
+        // fields on each row are the ones that ride `--timeseries` and/or
+        // the healing addon, which their own `Option`s encode per-row
+        // rather than a second coverage entry.
+        let series = require(&r.blocks.series, "series", &r.coverage);
         // Log-wide, not per-entity -- see `FightData::healing_available`'s
         // doc comment. `NotComputed` is already fatal via the `require`
         // call above (this crate's `PARSE_OPTS` never leaves a gate
@@ -245,6 +391,8 @@ impl FightData {
                     let sup = support.by_entity.get(e.id);
                     let heal = healing.by_entity.get(e.id);
                     let contrib = contribution.by_entity.get(e.id);
+                    let boon_map = boons.by_entity.get(e.id);
+                    let series_row = series.by_entity.get(e.id);
 
                     players.push(PlayerData {
                         entity_id: e.id,
@@ -353,6 +501,65 @@ impl FightData {
                                     &r.catalogs,
                                 )
                             })
+                            .unwrap_or_default(),
+
+                        boons: boon_map
+                            .map(|m| {
+                                m.iter()
+                                    .map(|(id, row)| {
+                                        let entry = r.catalogs.buffs.get(id);
+                                        BoonRow {
+                                            buff_id: *id,
+                                            name: entry.map(|e| e.name.clone()).unwrap_or_default(),
+                                            stacking: entry
+                                                .map(|e| e.stacking.to_string())
+                                                .unwrap_or_default(),
+                                            uptime_pct: row.uptime_pct,
+                                            avg_stacks: row.avg_stacks,
+                                            gen_self: row.generation.self_pct,
+                                            gen_group: row.generation.group_pct,
+                                            gen_squad: row.generation.squad_pct,
+                                            states: row
+                                                .states
+                                                .as_ref()
+                                                .map(|s| {
+                                                    s.iter().map(|(t, v)| (*t, *v as i32)).collect()
+                                                })
+                                                .unwrap_or_default(),
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+
+                        // `series_row` is `None` for a player with no
+                        // series row at all -- an empty `Vec` per field
+                        // is the same "measured absence" convention every
+                        // other by-skill/by-entity lookup in this
+                        // function follows. The three `Option<SeriesOut>`
+                        // fields inside a present row (healing/barrier
+                        // received, health_percents) additionally fold
+                        // "not measured" (no healing addon / no
+                        // `HEALTH_UPDATE` seen) into that same empty
+                        // `Vec` -- see the field doc comments on
+                        // `PlayerData` for why neither has a spare
+                        // `Option` to keep the two apart.
+                        damage_1s: series_row
+                            .map(|s| decode_series(&s.damage))
+                            .unwrap_or_default(),
+                        damage_taken_1s: series_row
+                            .map(|s| decode_series(&s.damage_taken))
+                            .unwrap_or_default(),
+                        healing_received_1s: series_row
+                            .and_then(|s| s.healing_received_1s.as_ref())
+                            .map(decode_series)
+                            .unwrap_or_default(),
+                        barrier_received_1s: series_row
+                            .and_then(|s| s.barrier_received_1s.as_ref())
+                            .map(decode_series)
+                            .unwrap_or_default(),
+                        health_percents: series_row
+                            .and_then(|s| s.health_percents.clone())
                             .unwrap_or_default(),
                     });
                 }
