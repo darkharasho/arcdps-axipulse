@@ -73,6 +73,7 @@ name = "arcdps_axipulse"
 version = "0.3.4"
 dependencies = [
  "arcdps",
+ "axilog-api",
  "flate2",
  "image",
  "log",
@@ -104,6 +105,34 @@ name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+
+[[package]]
+name = "axilog-api"
+version = "1.3.0"
+source = "git+https://github.com/darkharasho/axilog.git?tag=v1.3.0#b0d4d1b60045f477d7db4f5669feb0372539cfe7"
+dependencies = [
+ "axilog-core",
+ "axilog-schema",
+]
+
+[[package]]
+name = "axilog-core"
+version = "1.3.0"
+source = "git+https://github.com/darkharasho/axilog.git?tag=v1.3.0#b0d4d1b60045f477d7db4f5669feb0372539cfe7"
+dependencies = [
+ "flate2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "axilog-schema"
+version = "1.3.0"
+source = "git+https://github.com/darkharasho/axilog.git?tag=v1.3.0#b0d4d1b60045f477d7db4f5669feb0372539cfe7"
+dependencies = [
+ "axilog-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "base64"
@@ -1092,11 +1121,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.18",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1804,7 +1853,7 @@ dependencies = [
  "flate2",
  "indexmap",
  "memchr",
- "thiserror",
+ "thiserror 2.0.18",
  "zopfli",
 ]
 
