@@ -25,7 +25,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconKind { Skill, Buff }
@@ -112,7 +112,7 @@ pub fn lookup_bundled(key: &str) -> Option<IconHandle> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IconKey { pub kind: IconKind, pub id: i64 }
+pub struct IconKey { pub kind: IconKind, pub id: u32 }
 
 #[derive(Clone, Copy)]
 pub struct IconHandle { pub tex: TextureId, pub aspect: f32 }
@@ -213,7 +213,7 @@ static CHAN: Lazy<Chan> = Lazy::new(|| {
 /// Look up an icon by `(kind, id)`. Returns `Some` once the texture has
 /// been uploaded; in the meantime kicks off a download/disk-load and
 /// returns `None` so the caller can fall back to a placeholder.
-pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
+pub fn lookup(fight: &FightData, key: IconKey) -> Option<IconHandle> {
     {
         let cache = CACHE.lock().ok()?;
         if let Some(state) = cache.by_key.get(&key) {
@@ -225,16 +225,14 @@ pub fn lookup(json: &EiJson, key: IconKey) -> Option<IconHandle> {
         }
     }
     // First sighting — resolve URL.
-    let url = match key.kind {
+    let url: Option<String> = match key.kind {
         // Damage entries from condi/boon procs (Burning, Bleeding, …)
-        // carry a buff ID and won't appear in skill_map — fall back to
-        // buff_map so the icon still resolves.
-        IconKind::Skill => json.skill_map.get(&format!("s{}", key.id))
-            .and_then(|e| e.icon.clone())
-            .or_else(|| json.buff_map.get(&format!("b{}", key.id))
-                .and_then(|e| e.icon.clone())),
-        IconKind::Buff  => json.buff_map.get(&format!("b{}", key.id))
-            .and_then(|e| e.icon.clone()),
+        // carry a buff ID and won't appear in the skill catalog — fall
+        // back to the buff catalog so the icon still resolves.
+        IconKind::Skill => fight.skill_icons.get(&key.id)
+            .or_else(|| fight.buff_icons.get(&key.id))
+            .cloned(),
+        IconKind::Buff  => fight.buff_icons.get(&key.id).cloned(),
     };
     let url = match url {
         Some(u) if !u.is_empty() => u,

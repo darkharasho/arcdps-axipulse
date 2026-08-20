@@ -4,7 +4,7 @@
 
 use arcdps::imgui::Ui;
 
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 const BG_CARD:       [f32; 4] = [0.085, 0.10,  0.13,  0.95];
 const BG_CARD_BORDER:[f32; 4] = [1.0, 1.0, 1.0, 0.06];
@@ -28,17 +28,17 @@ const BOON_GAP:     f32 = 2.0;
 /// Render the Timeline tab contents (no window — caller owns that).
 pub fn render_content(
     ui: &Ui,
-    json: &EiJson,
+    fight: &FightData,
     idx: usize,
     derived: &crate::derived::Derived,
     layers: &mut crate::config::TimelineLayers,
 ) {
     render_layer_toggles(ui, layers);
     ui.separator();
-    render_time_axis(ui, json.duration_ms);
+    render_time_axis(ui, fight.duration_ms);
 
     // All heavy data was pre-computed once when the fight landed.
-    let dur = json.duration_ms;
+    let dur = fight.duration_ms;
     let health    = if layers.health           { derived.health_samples.as_slice() }    else { &[] };
     let dmg_dealt = if layers.damage_dealt     { derived.dmg_dealt_samples.as_slice() } else { &[] };
     let dmg_taken = if layers.damage_taken     { derived.dmg_taken_samples.as_slice() } else { &[] };
@@ -86,7 +86,7 @@ pub fn render_content(
     );
 
     ui.dummy([0.0, 6.0]);
-    render_inspector(ui, json, idx, derived);
+    render_inspector(ui, fight, idx, derived);
 }
 
 fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
@@ -384,18 +384,15 @@ fn draw_boon_lane(
 
 // --- inspector cards under the timeline ---------------------------------
 
-fn render_inspector(ui: &Ui, json: &EiJson, idx: usize, derived: &crate::derived::Derived) {
+fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::derived::Derived) {
     use crate::pulse_metrics::*;
 
-    let p = &json.players[idx];
-    let ending_hp = p.health_percents.last()
-        .and_then(|pair| pair.get(1).copied())
-        .unwrap_or(100.0);
+    let p = &fight.players[idx];
+    let ending_hp = p.health_percents.last().map(|(_, hp)| *hp).unwrap_or(100.0);
     let deaths_n = deaths(p);
     let downs_n = downs(p);
     let dmg_taken = damage_taken(p);
 
-    let _ = json;
     let boons = &derived.boon_uptimes;
     let (dist_avg, dist_max) = if derived.distance_samples.is_empty() {
         (None, None)

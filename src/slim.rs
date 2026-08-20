@@ -1,4 +1,11 @@
-//! Post-derive slimming of a parsed fight.
+//! Post-derive slimming of a parsed Elite Insights fight.
+//!
+//! **Orphaned as of the axilog cutover and deleted by migration Task 8.**
+//! Nothing calls it: `plugin.rs` parses with `crate::parse::parse_log`
+//! now, and a `FightData` has no oversized ext-stats trees to collapse
+//! because the `ReportV1` it was projected from is dropped inside
+//! `parse_log`. Its `tests/slim_test.rs` coverage is kept until Task 8
+//! removes both together.
 //!
 //! A retained `EiJson` for a mid-size WvW fight measured ~78 MB, and
 //! ~80% of that was `extHealingStats`/`extBarrierStats` arrays that the
@@ -16,9 +23,62 @@
 //! `rotation`) are left untouched.
 
 use crate::ei_model::{
-    EiJson, ExtBarrierStats, ExtHealingStats, OutgoingBarrierEntry, OutgoingHealEntry,
+    EiJson, EiPlayer, ExtBarrierStats, ExtHealingStats, OutgoingBarrierEntry, OutgoingHealEntry,
 };
-use crate::pulse_metrics as pm;
+
+// These five were `crate::pulse_metrics` accessors until that module
+// moved onto `FightData`. Inlined here verbatim rather than deleted
+// with their old home, so this module keeps compiling unchanged until
+// Task 8 removes it whole. Do not add callers.
+mod pm {
+    use super::EiPlayer;
+
+    pub fn healing(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .map(|h| h.outgoing_healing_allies.iter()
+                .filter_map(|recip| recip.first().map(|e| e.healing))
+                .sum())
+            .unwrap_or(0)
+    }
+
+    pub fn hps(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .map(|h| h.outgoing_healing_allies.iter()
+                .filter_map(|recip| recip.first().map(|e| e.hps))
+                .sum())
+            .unwrap_or(0)
+    }
+
+    pub fn healing_downed(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .map(|h| h.outgoing_healing_allies.iter()
+                .filter_map(|recip| recip.first().map(|e| e.downed_healing))
+                .sum())
+            .unwrap_or(0)
+    }
+
+    pub fn barrier(p: &EiPlayer) -> u64 {
+        p.ext_barrier_stats.as_ref()
+            .map(|h| h.outgoing_barrier_allies.iter()
+                .filter_map(|recip| recip.first().map(|e| e.barrier))
+                .sum())
+            .unwrap_or(0)
+    }
+
+    pub fn incoming_healing(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .and_then(|h| h.healing_received_1s.get(0))
+            .and_then(|arr| arr.last().copied())
+            .unwrap_or(0)
+    }
+
+    pub fn incoming_barrier(p: &EiPlayer) -> u64 {
+        p.ext_barrier_stats.as_ref()
+            .and_then(|h| h.barrier_received_1s.get(0))
+            .and_then(|arr| arr.last().copied())
+            .unwrap_or(0)
+    }
+}
 
 pub fn slim_after_derive(json: &mut EiJson) {
     for p in &mut json.players {

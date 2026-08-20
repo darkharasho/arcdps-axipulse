@@ -1,12 +1,18 @@
-//! Roll up `EiPlayer.ext_healing_stats.total_healing_dist` and
-//! `ext_barrier_stats.total_barrier_dist` into sortable per-skill
-//! entries. Mirrors the pattern in `top_skills`.
+//! Roll up a player's per-skill healing / barrier distributions into
+//! sortable entries. Mirrors the pattern in `top_skills`.
+//!
+//! Both source lists (`PlayerData::healing_by_skill` /
+//! `barrier_by_skill`) are empty when the log carries no arcdps healing
+//! addon data at all -- callers must check `FightData::healing_available`
+//! before reading an empty result as "this player healed nothing".
 
-use crate::ei_model::EiPlayer;
+use crate::fight_data::PlayerData;
+use crate::top_skills::skill_label;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealEntry {
-    pub id: i64,
+    pub id: u32,
+    pub name: String,
     pub healing: u64,
     pub downed_healing: u64,
     pub hits: u64,
@@ -14,55 +20,53 @@ pub struct HealEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BarrierEntry {
-    pub id: i64,
+    pub id: u32,
+    pub name: String,
     pub barrier: u64,
     pub hits: u64,
 }
 
-fn flatten_heals(p: &EiPlayer) -> Vec<HealEntry> {
-    let Some(stats) = p.ext_healing_stats.as_ref() else { return Vec::new(); };
-    stats.total_healing_dist.iter()
-        .flatten()
-        .map(|e| HealEntry {
-            id: e.id,
-            healing: e.total_healing,
-            downed_healing: e.total_downed_healing,
-            hits: e.hits,
+fn heal_entries(p: &PlayerData) -> Vec<HealEntry> {
+    p.healing_by_skill
+        .iter()
+        .map(|r| HealEntry {
+            id: r.skill_id,
+            name: skill_label(r),
+            healing: r.total,
+            downed_healing: r.downed,
+            hits: u64::from(r.hits),
         })
         .collect()
 }
 
-fn flatten_barriers(p: &EiPlayer) -> Vec<BarrierEntry> {
-    let Some(stats) = p.ext_barrier_stats.as_ref() else { return Vec::new(); };
-    stats.total_barrier_dist.iter()
-        .flatten()
-        .map(|e| BarrierEntry {
-            id: e.id,
-            barrier: e.total_barrier,
-            hits: e.hits,
-        })
-        .collect()
-}
-
-pub fn top_healing(p: &EiPlayer, limit: usize) -> Vec<HealEntry> {
-    let mut entries = flatten_heals(p);
+pub fn top_healing(p: &PlayerData, limit: usize) -> Vec<HealEntry> {
+    let mut entries = heal_entries(p);
     entries.retain(|e| e.healing > 0);
     entries.sort_by(|a, b| b.healing.cmp(&a.healing));
     entries.truncate(limit);
     entries
 }
 
-pub fn top_downed_healing(p: &EiPlayer, limit: usize) -> Vec<HealEntry> {
-    let mut entries = flatten_heals(p);
+pub fn top_downed_healing(p: &PlayerData, limit: usize) -> Vec<HealEntry> {
+    let mut entries = heal_entries(p);
     entries.retain(|e| e.downed_healing > 0);
     entries.sort_by(|a, b| b.downed_healing.cmp(&a.downed_healing));
     entries.truncate(limit);
     entries
 }
 
-pub fn top_barrier(p: &EiPlayer, limit: usize) -> Vec<BarrierEntry> {
-    let mut entries = flatten_barriers(p);
-    entries.retain(|e| e.barrier > 0);
+pub fn top_barrier(p: &PlayerData, limit: usize) -> Vec<BarrierEntry> {
+    let mut entries: Vec<BarrierEntry> = p
+        .barrier_by_skill
+        .iter()
+        .filter(|r| r.total > 0)
+        .map(|r| BarrierEntry {
+            id: r.skill_id,
+            name: skill_label(r),
+            barrier: r.total,
+            hits: u64::from(r.hits),
+        })
+        .collect();
     entries.sort_by(|a, b| b.barrier.cmp(&a.barrier));
     entries.truncate(limit);
     entries

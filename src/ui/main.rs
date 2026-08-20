@@ -9,7 +9,6 @@ use arcdps::imgui::{Condition, StyleColor, StyleVar, Ui};
 use once_cell::sync::Lazy;
 
 use crate::config::Config;
-use crate::self_identify::find_self_index;
 use crate::state::AppState;
 
 // --- palette (shared with pulse/timeline at a glance, kept local) -------
@@ -72,8 +71,10 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
             ui.text_disabled("Waiting for the first parsed fight...");
             return;
         };
-        let json = &record.data;
-        let Some(idx) = find_self_index(json) else {
+        let fight = &record.data;
+        // `self_idx` is resolved once at projection time from
+        // `encounter.recorded_by`, not re-guessed here every frame.
+        let Some(idx) = fight.self_idx else {
             ui.text_disabled("Could not identify local player in this fight.");
             return;
         };
@@ -84,9 +85,9 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         let tab = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
         let derived = record.derived.as_ref();
         match tab {
-            TopTab::Pulse    => crate::ui::pulse::render_content(ui, json, idx, derived),
-            TopTab::Timeline => crate::ui::timeline::render_content(ui, json, idx, derived, &mut config.timeline_layers),
-            TopTab::Map      => crate::ui::map::render_content(ui, json, idx, derived, &record.log_path),
+            TopTab::Pulse    => crate::ui::pulse::render_content(ui, fight, idx, derived),
+            TopTab::Timeline => crate::ui::timeline::render_content(ui, fight, idx, derived, &mut config.timeline_layers),
+            TopTab::Map      => crate::ui::map::render_content(ui, fight, idx, derived, &record.log_path),
         }
     });
 
@@ -252,7 +253,7 @@ fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
         Some(rec) => format!(
             "Latest \u{00b7} {} \u{00b7} {} \u{00b7} {} players",
             mmss(rec.data.duration_ms),
-            short_fight_name(&rec.data.fight_name),
+            rec.data.map_name.as_str(),
             rec.data.players.len(),
         ),
         None => "Latest".to_string(),
@@ -267,7 +268,7 @@ fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
                 "F{}  \u{00b7} {} \u{00b7} {} \u{00b7} {} players",
                 fight_no,
                 mmss(rec.data.duration_ms),
-                short_fight_name(&rec.data.fight_name),
+                rec.data.map_name.as_str(),
                 rec.data.players.len(),
             ));
         }
@@ -318,9 +319,4 @@ fn render_top_tabs(ui: &Ui) {
 fn mmss(ms: u64) -> String {
     let sec = ms / 1000;
     format!("{}:{:02}", sec / 60, sec % 60)
-}
-
-/// Strip the "Detailed WvW - " prefix EI puts on WvW logs.
-fn short_fight_name(name: &str) -> String {
-    name.strip_prefix("Detailed WvW - ").unwrap_or(name).to_string()
 }

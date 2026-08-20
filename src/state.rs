@@ -7,23 +7,27 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::derived::Derived;
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
-// Each retained fight costs real memory inside the game process
-// (~15-25 MB slimmed, measured on a 55-player WvW log; ~78 MB before
-// slimming). 32 slots let a long session pin gigabytes and drove the
-// box into parse-time swap storms; 8 bounds the worst case around
-// ~200 MB while still covering "compare the last few fights".
+// Each retained fight costs real memory inside the game process. A
+// `FightData` is a purpose-built projection rather than a whole parsed
+// document -- the `ReportV1` it was read from is dropped inside
+// `parse::parse_log` and never stored -- but it still carries every
+// squad member's per-second series and position track, so the history
+// cap earned in the Elite Insights era still applies: 32 slots let a
+// long session pin gigabytes and drove the box into parse-time swap
+// storms; 8 bounds the worst case while still covering "compare the
+// last few fights".
 const HISTORY_CAP: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct FightRecord {
     pub log_path: PathBuf,
     pub parsed_at: SystemTime,
-    pub data: EiJson,
+    pub data: FightData,
     /// Pre-computed per-fight derives shared across history. Computed
     /// once on the parser worker thread; the UI reads from this each
-    /// frame instead of re-traversing the EI JSON.
+    /// frame instead of re-traversing `FightData`.
     pub derived: Arc<Derived>,
 }
 

@@ -1,5 +1,7 @@
-use arcdps_axipulse::timeline_buckets::{cumulative_to_per_second, extract_damage_dealt, extract_damage_taken};
-use arcdps_axipulse::ei_model::EiJson;
+use arcdps_axipulse::fight_data::PlayerData;
+use arcdps_axipulse::timeline_buckets::{
+    cumulative_to_per_second, extract_damage_dealt, extract_damage_taken,
+};
 
 #[test]
 fn cumulative_to_per_second_takes_first_difference() {
@@ -10,42 +12,28 @@ fn cumulative_to_per_second_takes_first_difference() {
 
 #[test]
 fn cumulative_to_per_second_handles_empty() {
-    let per = cumulative_to_per_second(&[]);
-    assert!(per.is_empty());
+    assert!(cumulative_to_per_second(&[]).is_empty());
+}
+
+/// The native series is already the one phase this plugin cares about,
+/// so there is no `[0]` phase index to pick any more -- the whole vec is
+/// the series.
+#[test]
+fn extract_damage_dealt_differences_the_series() {
+    let p = PlayerData {
+        damage_1s: vec![0, 100, 300, 300, 500, 500],
+        ..PlayerData::default()
+    };
+    assert_eq!(extract_damage_dealt(&p), vec![0, 100, 200, 0, 200, 0]);
 }
 
 #[test]
-fn extract_damage_dealt_uses_phase_zero() {
-    let j: EiJson = serde_json::from_str(r#"{
-        "fightName":"t","durationMS":5000,
-        "players":[{
-            "name":"me","account":":me.1","profession":"Guardian",
-            "damage1S":[[0,100,300,300,500,500]]
-        }],"targets":[]
-    }"#).unwrap();
-    let per = extract_damage_dealt(&j.players[0]);
-    assert_eq!(per, vec![0, 100, 200, 0, 200, 0]);
-}
-
-#[test]
-fn extract_damage_taken_uses_phase_zero() {
-    let j: EiJson = serde_json::from_str(r#"{
-        "fightName":"t","durationMS":5000,
-        "players":[{
-            "name":"me","account":":me.1","profession":"Guardian",
-            "damageTaken1S":[[0,50,75,75]]
-        }],"targets":[]
-    }"#).unwrap();
-    let per = extract_damage_taken(&j.players[0]);
-    assert_eq!(per, vec![0, 50, 25, 0]);
+fn extract_damage_taken_differences_the_series() {
+    let p = PlayerData { damage_taken_1s: vec![0, 50, 75, 75], ..PlayerData::default() };
+    assert_eq!(extract_damage_taken(&p), vec![0, 50, 25, 0]);
 }
 
 #[test]
 fn extract_damage_dealt_returns_empty_when_absent() {
-    let j: EiJson = serde_json::from_str(r#"{
-        "fightName":"t","durationMS":5000,
-        "players":[{"name":"x","account":":x.1","profession":"Guardian"}],
-        "targets":[]
-    }"#).unwrap();
-    assert_eq!(extract_damage_dealt(&j.players[0]), Vec::<u64>::new());
+    assert_eq!(extract_damage_dealt(&PlayerData::default()), Vec::<u64>::new());
 }

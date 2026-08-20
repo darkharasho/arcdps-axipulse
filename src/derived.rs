@@ -1,16 +1,17 @@
-//! Per-fight derived data — every expensive walk over EI JSON the UI
-//! used to do every frame is computed exactly once here (on the parser
-//! worker thread, right after EI returns) and stored on `FightRecord`
-//! behind an `Arc`. Render paths become cheap reads.
+//! Per-fight derived data — every expensive walk over the parsed fight
+//! the UI used to do every frame is computed exactly once here (on the
+//! parser worker thread, right after the parse returns) and stored on
+//! `FightRecord` behind an `Arc`. Render paths become cheap reads.
 //!
 //! All fields are public so callers can read them without methods.
 
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 
 #[derive(Debug, Default)]
 pub struct Derived {
-    /// Resolved local-player index, or `None` if EI's `recordedAccountBy`
-    /// didn't match any player.
+    /// Resolved local-player index, copied from `FightData::self_idx`
+    /// (`encounter.recorded_by` joined onto the roster). `None` when the
+    /// recorder is not a roster entity.
     pub self_idx: Option<usize>,
 
     // --- Pulse Overview / Damage / Support squad ranks --------------
@@ -43,10 +44,9 @@ pub struct Derived {
 }
 
 impl Derived {
-    pub fn compute(json: &EiJson) -> Self {
+    pub fn compute(fight: &FightData) -> Self {
         use crate::boon_uptime::collect_uptimes;
         use crate::fight_composition::compute as compute_comp;
-        use crate::self_identify::find_self_index;
         use crate::squad_rank::{rank_in_squad, RankMetric};
         use crate::timeline_boons::{defensive_boons, offensive_boons};
         use crate::timeline_buckets::{extract_damage_dealt, extract_damage_taken};
@@ -55,18 +55,18 @@ impl Derived {
         use crate::top_heals::{top_barrier, top_downed_healing, top_healing};
         use crate::top_skills::{top_damage, top_down_contribution};
 
-        let self_idx = find_self_index(json);
+        let self_idx = fight.self_idx;
         let mut d = Derived { self_idx, ..Derived::default() };
-        d.composition = compute_comp(json, self_idx.unwrap_or(0));
+        d.composition = compute_comp(fight, self_idx.unwrap_or(0));
 
         let Some(idx) = self_idx else { return d; };
-        let Some(p) = json.players.get(idx) else { return d; };
+        let Some(p) = fight.players.get(idx) else { return d; };
 
-        d.rank_damage            = rank_in_squad(json, idx, RankMetric::Damage);
-        d.rank_down_contribution = rank_in_squad(json, idx, RankMetric::DownContribution);
-        d.rank_strips            = rank_in_squad(json, idx, RankMetric::Strips);
-        d.rank_cleanses          = rank_in_squad(json, idx, RankMetric::Cleanses);
-        d.rank_damage_taken      = rank_in_squad(json, idx, RankMetric::DamageTaken);
+        d.rank_damage            = rank_in_squad(fight, idx, RankMetric::Damage);
+        d.rank_down_contribution = rank_in_squad(fight, idx, RankMetric::DownContribution);
+        d.rank_strips            = rank_in_squad(fight, idx, RankMetric::Strips);
+        d.rank_cleanses          = rank_in_squad(fight, idx, RankMetric::Cleanses);
+        d.rank_damage_taken      = rank_in_squad(fight, idx, RankMetric::DamageTaken);
 
         d.top_damage            = top_damage(p, 8);
         d.top_down_contribution = top_down_contribution(p, 8);
@@ -76,11 +76,11 @@ impl Derived {
 
         d.boon_uptimes = collect_uptimes(p);
 
-        let dur = json.duration_ms;
+        let dur = fight.duration_ms;
         d.health_samples    = sample_health_per_second(p, dur);
         d.dmg_dealt_samples = extract_damage_dealt(p);
         d.dmg_taken_samples = extract_damage_taken(p);
-        d.distance_samples  = distance_to_commander_per_second(json, idx, dur);
+        d.distance_samples  = distance_to_commander_per_second(fight, idx, dur);
         d.off_boons         = offensive_boons(p, dur);
         d.def_boons         = defensive_boons(p, dur);
 

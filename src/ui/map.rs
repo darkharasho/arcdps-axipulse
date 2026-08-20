@@ -13,8 +13,12 @@ use arcdps::imgui::Ui;
 
 #[cfg(windows)]
 use crate::derived::Derived;
+// `FightData` is only needed by the windows-gated render paths, but
+// `CastRow` is part of a pure helper's signature and must be visible on
+// every target the host tests run on.
+use crate::fight_data::CastRow;
 #[cfg(windows)]
-use crate::ei_model::EiJson;
+use crate::fight_data::FightData;
 #[cfg(windows)]
 use crate::map::tiles::{get_map_tiles, map_pixel_size};
 #[cfg(windows)]
@@ -98,90 +102,118 @@ const TRAIL_COLOR_RECENT_SELF: [f32; 4] = [0.06, 0.72, 0.51, 0.65];
 #[cfg(windows)]
 const TRAIL_COLOR_RECENT_PEER: [f32; 4] = [0.86, 0.86, 0.92, 0.55];
 
-/// Linearly interpolate between two adjacent position samples.
+/// Linearly interpolate a track's `(x, y)` at `t_ms`.
 ///
-/// `samples` is the raw `combat_replay_data.positions` vec: each entry
-/// is `[x, y]` (or longer; we only read indices 0 and 1).
-/// `t_ms` is elapsed time since fight start. `polling_rate_ms` is the
-/// EI sample spacing.
+/// # This function used to be wrong for 8 of 47 players
 ///
-/// Returns `None` if `samples` is empty or the resolved sample is
-/// malformed (fewer than 2 components). Clamps to the last sample for
-/// times past the end. A zero polling rate returns the first sample.
-pub fn lerp_position(samples: &[Vec<f64>], t_ms: u64, polling_rate_ms: u64) -> Option<(f64, f64)> {
+/// It previously took only `(samples, t_ms, polling_rate)` and computed
+/// the sample index as `t_ms / polling_rate` — i.e. it assumed every
+/// player's track started at t=0 on one shared grid, which is what
+/// Elite Insights' single `combatReplayMetaData.pollingRate` implied.
+/// Position tracks share the grid INTERVAL but not its ORIGIN: a track
+/// begins at that player's own first-aware time rounded up to the grid.
+/// On this crate's fixture the 93 tracks start anywhere from 0ms to
+/// 100800ms, so for a late joiner the old index was off by up to 336
+/// samples and drew them wherever someone else's history happened to
+/// sit. Hence `track_start_ms`, which is per track and not optional.
+///
+/// `samples` is `PlayerData::positions` — RAW WORLD INCHES. Projecting
+/// to a map pixel is the caller's job, one position at a time, through
+/// `FightData::arena`.
+///
+/// Returns `None` for an empty track. Clamps (holds) at the first sample
+/// for times before the track starts and at the last for times past its
+/// end, matching axilog's own `interp_at`. A zero `poll_ms` returns the
+/// first sample rather than dividing by zero.
+pub fn lerp_position(
+    samples: &[(f32, f32)],
+    track_start_ms: u64,
+    t_ms: u64,
+    poll_ms: u64,
+) -> Option<(f32, f32)> {
     if samples.is_empty() {
         return None;
     }
-    if polling_rate_ms == 0 || samples.len() == 1 {
-        let s = &samples[0];
-        if s.len() < 2 { return None; }
-        return Some((s[0], s[1]));
+    if poll_ms == 0 || samples.len() == 1 || t_ms <= track_start_ms {
+        return samples.first().copied();
     }
     let last_idx = samples.len() - 1;
-    let f_idx = (t_ms as f64) / (polling_rate_ms as f64);
+    let f_idx = (t_ms - track_start_ms) as f64 / (poll_ms as f64);
     let idx = (f_idx.floor() as usize).min(last_idx);
-    let frac = (f_idx - (idx as f64)).clamp(0.0, 1.0);
-    let a = &samples[idx];
-    if a.len() < 2 { return None; }
+    let frac = (f_idx - (idx as f64)).clamp(0.0, 1.0) as f32;
+    let a = samples[idx];
     if idx >= last_idx {
-        return Some((a[0], a[1]));
+        return Some(a);
     }
-    let b = &samples[idx + 1];
-    if b.len() < 2 { return None; }
-    Some((
-        a[0] + (b[0] - a[0]) * frac,
-        a[1] + (b[1] - a[1]) * frac,
-    ))
+    let b = samples[idx + 1];
+    Some((a.0 + (b.0 - a.0) * frac, a.1 + (b.1 - a.1) * frac))
+}
+
+/// Index of the most recent sample at or before `t_ms` in a track that
+/// starts at `track_start_ms`. Clamped to the track's own bounds; 0 for
+/// an empty track or a zero `poll_ms`. Shared by the trail renderer,
+/// which needs an index rather than an interpolated point.
+pub fn sample_index_at(
+    sample_count: usize,
+    track_start_ms: u64,
+    t_ms: u64,
+    poll_ms: u64,
+) -> usize {
+    if sample_count == 0 || poll_ms == 0 {
+        return 0;
+    }
+    ((t_ms.saturating_sub(track_start_ms) / poll_ms) as usize).min(sample_count - 1)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberStatus { Alive, Down, Dead }
 
 /// Status of a player at time `t_ms`. Dead overrides Down.
-pub fn status_at(dead_ranges: &[Vec<f64>], down_ranges: &[Vec<f64>], t_ms: u64) -> MemberStatus {
-    let t = t_ms as f64;
-    for r in dead_ranges {
-        if r.len() >= 2 && t >= r[0] && t <= r[1] {
+///
+/// Ranges are half-open `[start_ms, end_ms)` on the native side, but the
+/// bound is kept INCLUSIVE here, exactly as it was against Elite
+/// Insights: this drives one frame of a scrubbed replay, and a player
+/// whose down window ends on the very millisecond being rendered still
+/// reads better as down than as instantly alive.
+pub fn status_at(dead_ranges: &[(u64, u64)], down_ranges: &[(u64, u64)], t_ms: u64) -> MemberStatus {
+    for (start, end) in dead_ranges {
+        if t_ms >= *start && t_ms <= *end {
             return MemberStatus::Dead;
         }
     }
-    for r in down_ranges {
-        if r.len() >= 2 && t >= r[0] && t <= r[1] {
+    for (start, end) in down_ranges {
+        if t_ms >= *start && t_ms <= *end {
             return MemberStatus::Down;
         }
     }
     MemberStatus::Alive
 }
 
-/// Health percent at time `t_ms`. Each `samples` entry is `[time_ms, hp_percent]`.
-/// Returns the most recent sample whose time is <= `t_ms`. Falls back to the
-/// first sample if `t_ms` is before any sample. Returns 100.0 if no samples.
-pub fn health_at(samples: &[Vec<f64>], t_ms: u64) -> f64 {
+/// Health percent at time `t_ms`. `samples` is
+/// `PlayerData::health_percents` — `(time_ms, hp_percent)` step-function
+/// pairs. Returns the most recent sample whose time is <= `t_ms`. Falls
+/// back to the first sample if `t_ms` is before any sample. Returns
+/// 100.0 if no samples.
+pub fn health_at(samples: &[(u64, f64)], t_ms: u64) -> f64 {
     if samples.is_empty() {
         return 100.0;
     }
-    let t = t_ms as f64;
-    let mut last = samples[0].get(1).copied().unwrap_or(100.0);
-    for s in samples {
-        if s.len() < 2 { continue; }
-        if s[0] > t { break; }
-        last = s[1];
+    let mut last = samples[0].1;
+    for (t, hp) in samples {
+        if *t > t_ms { break; }
+        last = *hp;
     }
     last
 }
 
-/// Boon stack count at time `t_ms`. Each `states` entry is `[time_ms, stacks]`.
-/// Returns the value of the last sample at or before `t_ms`, else 0.
-pub fn boon_stacks_at(states: &[Vec<f64>], t_ms: u64) -> i32 {
-    if states.is_empty() {
-        return 0;
-    }
-    let t = t_ms as f64;
+/// Boon stack count at time `t_ms`. `states` is `BoonRow::states` —
+/// `(time_ms, stacks)`. Returns the value of the last state at or before
+/// `t_ms`, else 0.
+pub fn boon_stacks_at(states: &[(u64, i32)], t_ms: u64) -> i32 {
     let mut last = 0_i32;
-    for s in states {
-        if s.len() < 2 { continue; }
-        if s[0] > t { break; }
-        last = s[1] as i32;
+    for (t, v) in states {
+        if *t > t_ms { break; }
+        last = *v;
     }
     last
 }
@@ -189,20 +221,22 @@ pub fn boon_stacks_at(states: &[Vec<f64>], t_ms: u64) -> i32 {
 /// Up to `max_results` most recent skill casts at or before `t_ms`, newest
 /// first. Negative cast times (pre-fight) are filtered out. Returns
 /// `Vec<(skill_id, cast_time_ms)>`.
+///
+/// `casts` is `PlayerData::casts`, already flat and already sorted by
+/// `(cast_time_ms, skill_id)` on the native side. The re-sort below is
+/// still needed: it reverses to newest-first, which is the order this
+/// renderer fades by.
 pub fn recent_skill_casts(
-    rotation: &[crate::ei_model::RotationEntry],
+    casts: &[CastRow],
     t_ms: u64,
     max_results: usize,
-) -> Vec<(i64, i64)> {
+) -> Vec<(u32, i64)> {
     let t = t_ms as i64;
-    let mut all: Vec<(i64, i64)> = Vec::new();
-    for entry in rotation {
-        for cast in &entry.skills {
-            if cast.cast_time < 0 { continue; }
-            if cast.cast_time > t { continue; }
-            all.push((entry.id, cast.cast_time));
-        }
-    }
+    let mut all: Vec<(u32, i64)> = casts
+        .iter()
+        .filter(|c| c.cast_time_ms >= 0 && c.cast_time_ms <= t)
+        .map(|c| (c.skill_id, c.cast_time_ms))
+        .collect();
     all.sort_by(|a, b| b.1.cmp(&a.1));
     all.truncate(max_results);
     all
@@ -344,7 +378,7 @@ fn render_controls(ui: &Ui, duration_ms: u64) {
 #[cfg(windows)]
 fn render_party_panel(
     ui: &Ui,
-    json: &EiJson,
+    fight: &FightData,
     self_idx: usize,
     time_ms: u64,
     panel_origin: [f32; 2],
@@ -360,18 +394,9 @@ fn render_party_panel(
         bg,
     ).filled(true).rounding(6.0).build();
 
-    let local_group = json.players.get(self_idx).map(|p| p.group).unwrap_or(-1);
-    let commander_pos: Option<(f64, f64)> = find_commander_position(json, time_ms);
-    let inch_to_pixel = json
-        .combat_replay_meta_data
-        .as_ref()
-        .and_then(|m| m.inch_to_pixel)
-        .unwrap_or(1.0);
-    let polling_rate = json
-        .combat_replay_meta_data
-        .as_ref()
-        .and_then(|m| m.polling_rate)
-        .unwrap_or(150);
+    let local_group = fight.players.get(self_idx).map(|p| p.subgroup).unwrap_or(-1);
+    let commander_pos: Option<(f32, f32)> = find_commander_position(fight, time_ms);
+    let poll_ms = fight.poll_ms;
 
     let pad = 10.0_f32;
     let mut y = panel_origin[1] + pad;
@@ -383,15 +408,12 @@ fn render_party_panel(
     y += 18.0;
     let row_h = 108.0_f32;
 
-    for (i, p) in json.players.iter().enumerate() {
-        if p.group != local_group { continue; }
-        if p.not_in_squad { continue; }
+    for (i, p) in fight.players.iter().enumerate() {
+        if p.subgroup != local_group { continue; }
+        if !p.in_squad { continue; }
 
-        let rd_pos = p.combat_replay_data.as_ref()
-            .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
-        let status = p.combat_replay_data.as_ref()
-            .map(|rd| status_at(&rd.dead, &rd.down, time_ms))
-            .unwrap_or(MemberStatus::Alive);
+        let rd_pos = lerp_position(&p.positions, p.track_start_ms, time_ms, poll_ms);
+        let status = status_at(&p.dead_ranges, &p.down_ranges, time_ms);
         let hp = health_at(&p.health_percents, time_ms);
 
         let row_y0 = y;
@@ -414,16 +436,17 @@ fn render_party_panel(
 
         let name_x = icon_x + icon_size + 8.0;
         let name_color = if i == self_idx { [0.06, 0.72, 0.51, 1.0] }
-            else if p.has_commander_tag { [0.96, 0.62, 0.04, 1.0] }
+            else if p.is_commander { [0.96, 0.62, 0.04, 1.0] }
             else { [0.97, 0.97, 1.00, 1.0] };
-        draw.add_text([name_x, icon_y + 2.0], name_color, p.name.as_str());
+        draw.add_text([name_x, icon_y + 2.0], name_color, p.character.as_str());
 
         if let (Some(cp), Some((px, py))) = (commander_pos, rd_pos) {
-            if !p.has_commander_tag {
-                let dx = (px - cp.0) as f32;
-                let dy = (py - cp.1) as f32;
-                let pixels = (dx * dx + dy * dy).sqrt();
-                let inches = (pixels / inch_to_pixel as f32) as i32;
+            if !p.is_commander {
+                // Positions are already world inches -- no inch-to-pixel
+                // conversion, because nothing has been projected yet.
+                let dx = px - cp.0;
+                let dy = py - cp.1;
+                let inches = (dx * dx + dy * dy).sqrt() as i32;
                 let dist_color = if inches > 600 { [0.93, 0.27, 0.27, 1.0] }
                     else if inches > 300 { [0.96, 0.62, 0.04, 1.0] }
                     else { [0.13, 0.77, 0.37, 1.0] };
@@ -463,13 +486,13 @@ fn render_party_panel(
         let mut bx = name_x;
         let by = bar_y0 + bar_h + 18.0;
         for boon_id in crate::map::boon_panel::PANEL_BOON_ORDER {
-            let stacks = p.buff_uptimes.iter()
-                .find(|b| b.id == *boon_id)
+            let stacks = p.boons.iter()
+                .find(|b| b.buff_id == *boon_id)
                 .map(|b| boon_stacks_at(&b.states, time_ms))
                 .unwrap_or(0);
             if stacks == 0 { continue; }
             let icon = crate::ui::icons::lookup(
-                json,
+                fight,
                 crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Buff, id: *boon_id },
             );
             if let Some(handle) = icon {
@@ -490,7 +513,7 @@ fn render_party_panel(
         }
 
         // Recent skill casts.
-        let skills = recent_skill_casts(&p.rotation, time_ms, 4);
+        let skills = recent_skill_casts(&p.casts, time_ms, 4);
         if !skills.is_empty() {
             let skill_px = 18.0_f32;
             let mut sx = name_x;
@@ -511,7 +534,7 @@ fn render_party_panel(
                 };
                 if opacity <= 0.0 { continue; }
                 let icon = crate::ui::icons::lookup(
-                    json,
+                    fight,
                     crate::ui::icons::IconKey { kind: crate::ui::icons::IconKind::Skill, id: *id },
                 );
                 if let Some(handle) = icon {
@@ -531,21 +554,12 @@ fn render_party_panel(
 
 
 #[cfg(windows)]
-fn find_commander_position(json: &EiJson, time_ms: u64) -> Option<(f64, f64)> {
-    let polling_rate = json
-        .combat_replay_meta_data
-        .as_ref()
-        .and_then(|m| m.polling_rate)
-        .unwrap_or(150);
-    for p in &json.players {
-        if !p.has_commander_tag { continue; }
-        if let Some(rd) = p.combat_replay_data.as_ref() {
-            if let Some(pos) = lerp_position(&rd.positions, time_ms, polling_rate) {
-                return Some(pos);
-            }
-        }
-    }
-    None
+/// The commander's raw WORLD position at `time_ms`, or `None` when there
+/// is no commander or their track is empty. Not projected — the party
+/// panel wants a real distance in inches, not a pixel gap.
+fn find_commander_position(fight: &FightData, time_ms: u64) -> Option<(f32, f32)> {
+    let p = fight.players.get(fight.commander_idx?)?;
+    lerp_position(&p.positions, p.track_start_ms, time_ms, fight.poll_ms)
 }
 
 /// Letterbox-fit an icon (with `aspect = w/h`) inside a `box_size` square.
@@ -569,6 +583,8 @@ struct PlayerDot<'a> {
     name: &'a str,
     account: &'a str,
     profession: &'a str,
+    /// Already projected into map-pixel space — see
+    /// `collect_positions_at_time`.
     x: f32,
     y: f32,
     is_self: bool,
@@ -576,10 +592,13 @@ struct PlayerDot<'a> {
     group: i32,
     status: MemberStatus,
     health_pct: f64,
-    /// Index of the most recent sample at or before time_ms.
+    /// Index of the most recent sample at or before time_ms, in THIS
+    /// player's own track. Meaningless in any other player's track.
     sample_idx: usize,
     /// The full positions vec, borrowed for the duration of this frame.
-    positions: &'a [Vec<f64>],
+    /// RAW WORLD INCHES — the trail renderer projects each sample
+    /// individually.
+    positions: &'a [(f32, f32)],
     player_index: usize,
 }
 
@@ -593,32 +612,33 @@ struct EnemyDot<'a> {
 
 #[cfg(windows)]
 fn collect_enemy_positions_at_time<'a>(
-    json: &'a EiJson,
+    fight: &'a FightData,
+    arena: &crate::fight_data::Arena,
+    canvas: (f32, f32),
     time_ms: u64,
 ) -> Vec<EnemyDot<'a>> {
-    let polling_rate = json
-        .combat_replay_meta_data
-        .as_ref()
-        .and_then(|m| m.polling_rate)
-        .unwrap_or(150);
+    let poll_ms = fight.poll_ms;
     let mut out = Vec::new();
-    for t in &json.targets {
-        if !t.enemy_player || t.is_fake { continue; }
-        let Some(rd) = t.combat_replay_data.as_ref() else { continue };
-        if rd.positions.is_empty() { continue; }
-        let Some((x, y)) = lerp_position(&rd.positions, time_ms, polling_rate) else { continue };
-        // EI names enemies like "Firebrand pl-42"; the prefix before
+    for e in &fight.enemies {
+        if e.positions.is_empty() { continue; }
+        let Some((wx, wy)) = lerp_position(&e.positions, e.track_start_ms, time_ms, poll_ms)
+        else { continue };
+        // Enemies are named like "Firebrand pl-42"; the prefix before
         // " pl-N" is the elite-spec display name and matches our
         // bundled class-icon keys exactly.
-        let prof = t.profession.as_deref()
-            .filter(|s| !s.is_empty())
-            .or_else(|| t.name.split(" pl-").next().filter(|s| !s.is_empty()))
-            .unwrap_or("");
+        let prof = if e.profession.is_empty() {
+            e.name.split(" pl-").next().unwrap_or("")
+        } else {
+            e.profession.as_str()
+        };
+        // Projected here, one position at a time. Nothing about this
+        // enemy's track is compared against anyone else's.
+        let (x, y) = arena.project(wx, wy, canvas.0, canvas.1);
         out.push(EnemyDot {
             profession: prof,
-            x: x as f32,
-            y: y as f32,
-            status: status_at(&rd.dead, &rd.down, time_ms),
+            x,
+            y,
+            status: status_at(&e.dead_ranges, &e.down_ranges, time_ms),
         });
     }
     out
@@ -626,37 +646,34 @@ fn collect_enemy_positions_at_time<'a>(
 
 #[cfg(windows)]
 fn collect_positions_at_time<'a>(
-    json: &'a EiJson,
+    fight: &'a FightData,
+    arena: &crate::fight_data::Arena,
+    canvas: (f32, f32),
     self_idx: usize,
     time_ms: u64,
 ) -> Vec<PlayerDot<'a>> {
-    let polling_rate = json
-        .combat_replay_meta_data
-        .as_ref()
-        .and_then(|m| m.polling_rate)
-        .unwrap_or(150);
+    let poll_ms = fight.poll_ms;
     let mut out = Vec::new();
-    for (i, p) in json.players.iter().enumerate() {
-        let Some(rd) = p.combat_replay_data.as_ref() else { continue };
-        let Some((x, y)) = lerp_position(&rd.positions, time_ms, polling_rate) else { continue };
-        let sample_idx = if polling_rate == 0 || rd.positions.is_empty() {
-            0
-        } else {
-            ((time_ms / polling_rate) as usize).min(rd.positions.len().saturating_sub(1))
-        };
+    for (i, p) in fight.players.iter().enumerate() {
+        let Some((wx, wy)) = lerp_position(&p.positions, p.track_start_ms, time_ms, poll_ms)
+        else { continue };
+        let (x, y) = arena.project(wx, wy, canvas.0, canvas.1);
         out.push(PlayerDot {
-            name: p.name.as_str(),
+            name: p.character.as_str(),
             account: p.account.as_str(),
             profession: p.profession.as_str(),
-            x: x as f32,
-            y: y as f32,
+            x,
+            y,
             is_self: i == self_idx,
-            is_commander: p.has_commander_tag,
-            group: p.group as i32,
-            status: status_at(&rd.dead, &rd.down, time_ms),
+            is_commander: p.is_commander,
+            group: p.subgroup,
+            status: status_at(&p.dead_ranges, &p.down_ranges, time_ms),
             health_pct: health_at(&p.health_percents, time_ms),
-            sample_idx,
-            positions: &rd.positions,
+            // Per-track, from this player's OWN start. The old code
+            // divided `time_ms` by the polling rate directly, which is
+            // only right for a track that starts at t=0.
+            sample_idx: sample_index_at(p.positions.len(), p.track_start_ms, time_ms, poll_ms),
+            positions: &p.positions,
             player_index: i,
         });
     }
@@ -688,29 +705,32 @@ fn render_tile_fetch_progress(ui: &Ui) {
 }
 
 #[cfg(windows)]
-pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, log_path: &std::path::PathBuf) {
+pub fn render_content(ui: &Ui, fight: &FightData, idx: usize, _derived: &Derived, log_path: &std::path::PathBuf) {
     render_tile_fetch_progress(ui);
     // Drain a couple of pending tile uploads per frame.
     tile_cache::drain_pending();
     let _ = sync_fight_key(log_path);
-    let duration_ms = json.duration_ms;
+    let duration_ms = fight.duration_ms;
     let time_ms = tick_playback(ui, duration_ms);
     // user_scale is read here for fit_scale * user_scale; pan_x/pan_y
     // are re-read inside the closure (after the Follow override) so we
     // discard them at the outer level.
     let user_scale = PLAYBACK.lock().expect("PLAYBACK mutex poisoned").user_scale;
 
-    // Resolve which WvW map this fight took place on. EI populates
-    // `zone`/`map_name` for some encounters but leaves them empty for
-    // WvW logs — fight_name ("Blue Alpine Borderlands", etc.) is the
-    // reliable source there.
-    let zone = [json.zone.as_deref(), json.map_name.as_deref(), Some(json.fight_name.as_str())]
-        .into_iter()
-        .flatten()
-        .find(|s| !s.is_empty())
-        .unwrap_or("");
+    // Resolve which WvW map this fight took place on. `encounter.map` is
+    // the map's own name ("Blue Alpine Borderlands", etc.) with no
+    // "Detailed WvW - " prefix to strip, so there is only one source to
+    // consult now.
+    let zone = fight.map_name.as_str();
     let Some(map) = resolve_map_from_zone(zone) else {
         ui.text_colored(TEXT_MUTED, format!("Not a WvW fight (zone: \"{}\")", zone));
+        return;
+    };
+    // Every position on this tab is a raw world coordinate; without the
+    // arena rect there is nothing to project them ONTO. Say so rather
+    // than draw an empty map with landmarks on it and no players.
+    let Some(arena) = fight.arena.as_ref() else {
+        ui.text_colored(TEXT_MUTED, "No replay positions for this fight (map has no arena).");
         return;
     };
 
@@ -733,28 +753,34 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             let _ = user_scale; // shadowed below
             let (user_scale, pan_x, pan_y) = {
                 let mut g = PLAYBACK.lock().expect("PLAYBACK mutex poisoned");
-                let polling_rate = json.combat_replay_meta_data
-                    .as_ref().and_then(|m| m.polling_rate).unwrap_or(150);
+                let poll_ms = fight.poll_ms;
 
                 if g.needs_initial_centre {
                     // Centroid of the local player's group at t=0; auto-zoom
                     // so the squad fills the viewport instead of starting
                     // fit-to-window on a vast empty map.
-                    let local_group = json.players.get(idx).map(|p| p.group).unwrap_or(-1);
-                    let mut sum_x = 0.0_f64;
-                    let mut sum_y = 0.0_f64;
+                    let local_group = fight.players.get(idx).map(|p| p.subgroup).unwrap_or(-1);
+                    let mut sum_x = 0.0_f32;
+                    let mut sum_y = 0.0_f32;
                     let mut count = 0_u32;
-                    for p in &json.players {
-                        if p.group != local_group || p.not_in_squad { continue; }
-                        if let Some(rd) = p.combat_replay_data.as_ref() {
-                            if let Some((x, y)) = lerp_position(&rd.positions, 0, polling_rate) {
-                                sum_x += x; sum_y += y; count += 1;
-                            }
+                    for p in &fight.players {
+                        if p.subgroup != local_group || !p.in_squad { continue; }
+                        // `lerp_position` holds at the track's first
+                        // sample for a t before it starts, so a group
+                        // member who joined late contributes where they
+                        // FIRST appeared rather than being skipped --
+                        // the same behaviour as the old code, but now
+                        // per track instead of assuming a shared t=0.
+                        if let Some((x, y)) =
+                            lerp_position(&p.positions, p.track_start_ms, 0, poll_ms)
+                        {
+                            let (px, py) = arena.project(x, y, mw, mh);
+                            sum_x += px; sum_y += py; count += 1;
                         }
                     }
                     if count > 0 {
-                        let cx = (sum_x / count as f64) as f32;
-                        let cy = (sum_y / count as f64) as f32;
+                        let cx = sum_x / count as f32;
+                        let cy = sum_y / count as f32;
                         g.user_scale = 3.0;
                         let s = fit_scale * g.user_scale;
                         g.pan_x = (mw * 0.5 - cx) * s;
@@ -764,13 +790,14 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 }
 
                 if g.follow_player {
-                    let local_pos = json.players.get(idx)
-                        .and_then(|p| p.combat_replay_data.as_ref())
-                        .and_then(|rd| lerp_position(&rd.positions, time_ms, polling_rate));
+                    let local_pos = fight.players.get(idx).and_then(|p| {
+                        lerp_position(&p.positions, p.track_start_ms, time_ms, poll_ms)
+                    });
                     if let Some((wx, wy)) = local_pos {
+                        let (px, py) = arena.project(wx, wy, mw, mh);
                         let s = fit_scale * g.user_scale;
-                        g.pan_x = (mw * 0.5 - wx as f32) * s;
-                        g.pan_y = (mh * 0.5 - wy as f32) * s;
+                        g.pan_x = (mw * 0.5 - px) * s;
+                        g.pan_y = (mh * 0.5 - py) * s;
                     }
                 }
                 (g.user_scale, g.pan_x, g.pan_y)
@@ -869,7 +896,7 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
 
             // Enemy markers — drawn before allies so squad icons sit on top.
             // Match upstream MovementView: class icon, tinted red, at 30% opacity.
-            let enemies = collect_enemy_positions_at_time(json, time_ms);
+            let enemies = collect_enemy_positions_at_time(fight, arena, (mw, mh), time_ms);
             for e in &enemies {
                 let cx = ox + e.x * scale;
                 let cy = oy + e.y * scale;
@@ -908,7 +935,7 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
             }
 
             // Time-indexed player positions.
-            let dots = collect_positions_at_time(json, idx, time_ms);
+            let dots = collect_positions_at_time(fight, arena, (mw, mh), idx, time_ms);
 
             // Trails (drawn before markers so dots sit on top).
             for dot in &dots {
@@ -916,9 +943,11 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 // Historical: every other sample, faded.
                 if recent_start > 1 {
                     let mut prev: Option<[f32; 2]> = None;
-                    for sample in dot.positions[..recent_start].iter().step_by(2) {
-                        if sample.len() < 2 { continue; }
-                        let p = [ox + (sample[0] as f32) * scale, oy + (sample[1] as f32) * scale];
+                    for (wx, wy) in dot.positions[..recent_start].iter().step_by(2) {
+                        // Each sample is projected on its own. Nothing
+                        // here indexes into another player's track.
+                        let (px, py) = arena.project(*wx, *wy, mw, mh);
+                        let p = [ox + px * scale, oy + py * scale];
                         if let Some(q) = prev {
                             draw.add_line(q, p, TRAIL_COLOR_HISTORY).thickness(1.0).build();
                         }
@@ -932,9 +961,9 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                     let color = if dot.is_self { TRAIL_COLOR_RECENT_SELF } else { TRAIL_COLOR_RECENT_PEER };
                     let thick = (if dot.is_self { 2.0 } else { 1.5 }) * marker_scale;
                     let mut prev: Option<[f32; 2]> = None;
-                    for sample in recent_slice {
-                        if sample.len() < 2 { continue; }
-                        let p = [ox + (sample[0] as f32) * scale, oy + (sample[1] as f32) * scale];
+                    for (wx, wy) in recent_slice {
+                        let (px, py) = arena.project(*wx, *wy, mw, mh);
+                        let p = [ox + px * scale, oy + py * scale];
                         if let Some(q) = prev {
                             draw.add_line(q, p, color).thickness(thick).build();
                         }
@@ -1006,7 +1035,7 @@ pub fn render_content(ui: &Ui, json: &EiJson, idx: usize, _derived: &Derived, lo
                 let panel_w: f32 = 260.0_f32.min(inner[0]);
                 render_party_panel(
                     ui,
-                    json,
+                    fight,
                     idx,
                     time_ms,
                     [origin[0], origin[1]],

@@ -23,7 +23,12 @@ use std::collections::HashMap;
 
 /// Everything the UI needs about one fight, read once from a native
 /// `ReportV1`.
-#[derive(Debug, Clone)]
+///
+/// `Default` is derived so tests can build a minimal fight with
+/// functional-update syntax. A defaulted `FightData` is EMPTY, not a
+/// fallback: nothing in production constructs one this way, and
+/// `from_report` sets every field explicitly.
+#[derive(Debug, Clone, Default)]
 pub struct FightData {
     pub duration_ms: u64,
     pub map_name: String,
@@ -46,10 +51,17 @@ pub struct FightData {
     /// `Role::EnemyPlayer` entities. `Role::Npc` entities are dropped --
     /// this projection carries only players on both sides.
     pub enemies: Vec<EnemyData>,
-    /// `EntityOut::id` -> index into `players`. Built once here so every
-    /// later task that joins a `blocks.*` row (keyed by entity id) back
-    /// onto a roster row doesn't have to re-derive it.
-    entity_index: HashMap<u32, usize>,
+    /// `EntityOut::id` -> index into `players`. Built once here so
+    /// anything that joins a row keyed by entity id back onto a roster
+    /// row doesn't have to re-derive it.
+    ///
+    /// Public, like every other field, so a caller (in practice a test)
+    /// can construct a `FightData` with functional-update syntax. It
+    /// guards no invariant `from_report` would be free to break: it is
+    /// derived from `players`, and the only thing that reads it,
+    /// `self_idx`'s resolution, has already run by the time this struct
+    /// exists.
+    pub entity_index: HashMap<u32, usize>,
     /// The WvW map's fixed world rect and arena image --
     /// `blocks.replay.tracks.arena`. `None` for a map axilog has no
     /// hand-authored arena image for (`ArenaOut::for_map_id`'s own doc
@@ -81,9 +93,43 @@ pub struct FightData {
     /// rendering "--" instead of "0") is migration Task 7's job; this
     /// task only populates the field.
     pub healing_available: bool,
+    /// `blocks.replay.tracks.poll_ms` -- the ONE sample interval shared by
+    /// every [`PlayerData::positions`] and [`EnemyData::positions`] track.
+    /// `0` when `--replay` did not run (there are no tracks to describe).
+    ///
+    /// Carried because [`PlayerData::positions`] drops each sample's own
+    /// timestamp: with `poll_ms` and the track's own
+    /// [`PlayerData::track_start_ms`], `positions[i]` is the position at
+    /// `track_start_ms + i * poll_ms` EXACTLY -- axilog's downsampler
+    /// (`axilog_core::analysis::replay::downsample`) emits one sample per
+    /// grid tick from `first_aware.div_ceil(poll_ms) * poll_ms` to the
+    /// last observed position with no gaps, so the two scalars are a
+    /// lossless stand-in for the dropped timestamps (verified over all 93
+    /// tracks in this crate's fixture: every sample satisfies
+    /// `t == samples[0].t + i * poll_ms`).
+    ///
+    /// **This pair is the only correct way to turn a track index into a
+    /// time.** Tracks do NOT share a start: this crate's fixture has
+    /// starts spread from 0ms to 100800ms and lengths from 105 to 462
+    /// samples, so `positions[i]` for two different players is generally
+    /// two different instants. Anything that compares two players'
+    /// samples must match them by TIME, never by index.
+    pub poll_ms: u64,
+    /// `catalogs.skills[id].icon` for the ids that have art, copied out so
+    /// the UI can resolve an icon for any skill id (including a
+    /// [`CastRow::skill_id`], which carries no row of its own) without the
+    /// `ReportV1` -- which this projection must not retain.
+    pub skill_icons: HashMap<u32, String>,
+    /// `catalogs.buffs[id].icon`, same rationale. Separate from
+    /// `skill_icons` because a buff id and a skill id share a namespace
+    /// only by accident: a boon nobody's damage came from has a buff entry
+    /// and no skill entry at all (see `BuffEntry::icon`'s own doc comment).
+    pub buff_icons: HashMap<u32, String>,
 }
 
-#[derive(Debug, Clone)]
+/// `Default` is derived for the same test-construction reason
+/// [`FightData`]'s is; `from_report` never leans on it.
+#[derive(Debug, Clone, Default)]
 pub struct PlayerData {
     pub entity_id: u32,
     pub account: String,
@@ -114,6 +160,15 @@ pub struct PlayerData {
     pub downs: u32,
     pub incoming_cc: u32,
     pub incoming_strips: u32,
+    // The six mitigation counters the Pulse "Defense" subview shows.
+    // All measured zeros when the player has no defenses row, per the
+    // block-vs-row distinction in `require`'s doc comment.
+    pub blocked: u32,
+    pub evaded: u32,
+    pub dodges: u32,
+    pub missed: u32,
+    pub interrupted: u32,
+    pub invulned: u32,
 
     // -- CC (blocks.cc.by_entity[id]) --
     pub applied_cc: u32,
@@ -206,7 +261,9 @@ pub struct PlayerData {
     pub health_percents: Vec<(u64, f64)>,
 
     // -- Replay (blocks.replay) --
-    /// `blocks.replay.tracks.by_entity[id].samples`, timestamp dropped and
+    /// `blocks.replay.tracks.by_entity[id].samples`, per-sample timestamp
+    /// dropped (recoverable from [`PlayerData::track_start_ms`] and
+    /// [`FightData::poll_ms`] -- see those two) and
     /// `(x, y)` narrowed to `f32` -- RAW WORLD INCHES, not pixels or any
     /// other projected unit. Converting to a map pixel is the UI's job
     /// (see [`FightData::arena`]'s doc comment for the formula), not
@@ -217,7 +274,8 @@ pub struct PlayerData {
     /// `blocks.replay.tracks.is_some()` to distinguish those two cases
     /// from each other, and neither leaves any samples to report.
     ///
-    /// **Does NOT have a uniform length across players.** A track starts
+    /// **Does NOT have a uniform length across players, or a uniform
+    /// start.** A track starts
     /// at this player's own first-aware time rounded up to the shared
     /// polling grid (`blocks.replay.tracks.poll_ms`) and ends at their
     /// last-aware time -- both genuinely per-player, not a shared window.
@@ -232,7 +290,21 @@ pub struct PlayerData {
     /// GRID: every sample's own timestamp (not carried here, see above)
     /// is an exact multiple of `poll_ms` -- verified against this fixture
     /// for every returned track.
+    ///
+    /// The starts differ too, and by much more than the lengths: measured
+    /// over all 93 of this fixture's tracks they range from 0ms to
+    /// 100800ms. **`positions[i]` for two different players is therefore
+    /// two different instants.** Anything comparing two tracks must
+    /// match by time (`track_start_ms + i * poll_ms`), never by index.
     pub positions: Vec<(f32, f32)>,
+    /// The timestamp (log-relative ms) of `positions[0]`, i.e. this
+    /// player's own first-aware time rounded UP to the shared
+    /// [`FightData::poll_ms`] grid. `0` when `positions` is empty.
+    ///
+    /// This is the anchor `positions`'s dropped timestamps collapse to --
+    /// see [`FightData::poll_ms`] for why the pair is lossless and why
+    /// index-alignment across two players is always wrong.
+    pub track_start_ms: u64,
     /// `blocks.replay.by_entity[id].down` -- half-open
     /// `[start_ms, end_ms)` down-state windows, log-relative ms. Always
     /// on (Task 11's always-on half of the replay block), unlike
@@ -291,7 +363,7 @@ pub struct PlayerData {
 /// struct was built against does not ask for one, and a rotation view can
 /// already join `skill_id` against a skill catalog if migration Task 7
 /// gives it one.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CastRow {
     pub skill_id: u32,
     pub cast_time_ms: i64,
@@ -308,7 +380,7 @@ pub struct CastRow {
 /// See [`FightData::arena`]'s doc comment for the pixel-projection
 /// formula every `(x, y)` in [`PlayerData::positions`] needs run through
 /// this rect before it is plottable.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Arena {
     pub image_width: u32,
     pub image_height: u32,
@@ -317,6 +389,32 @@ pub struct Arena {
     pub world_min_y: f64,
     pub world_max_x: f64,
     pub world_max_y: f64,
+}
+
+impl Arena {
+    /// Projects ONE raw world position onto a `canvas_w` x `canvas_h`
+    /// rectangle, per the formula in this type's doc comment. World y
+    /// grows northward and canvas y grows downward, hence the flip.
+    ///
+    /// Deliberately per-position and stateless: a position is plottable
+    /// on its own, so nothing here needs a second player's track, a
+    /// shared sample index, or a polling grid. That is the whole point --
+    /// [`PlayerData::positions`] tracks are ragged, and any projection
+    /// that needed two of them lined up would be wrong.
+    ///
+    /// Degenerate (zero-width or zero-height) world rects project to the
+    /// canvas origin rather than a NaN; no such rect exists in axilog's
+    /// map table, but a NaN would silently poison a draw call.
+    pub fn project(&self, x: f32, y: f32, canvas_w: f32, canvas_h: f32) -> (f32, f32) {
+        let span_x = (self.world_max_x - self.world_min_x) as f32;
+        let span_y = (self.world_max_y - self.world_min_y) as f32;
+        if span_x == 0.0 || span_y == 0.0 {
+            return (0.0, 0.0);
+        }
+        let fx = (x - self.world_min_x as f32) / span_x;
+        let fy = (y - self.world_min_y as f32) / span_y;
+        (fx * canvas_w, (1.0 - fy) * canvas_h)
+    }
 }
 
 /// One buff row on [`PlayerData::boons`].
@@ -332,7 +430,7 @@ pub struct Arena {
 /// `BuffEntry::stacking` -- read `avg_stacks` for an intensity buff and
 /// `uptime_pct` for a duration buff, per the brief; this projection does
 /// not infer stacking from the buff id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BoonRow {
     pub buff_id: u32,
     pub name: String,
@@ -431,7 +529,7 @@ pub fn decode_series(s: &SeriesOut) -> Vec<u64> {
 ///   a barrier row -- GW2EI's barrier distribution has no downed field to
 ///   measure it from at all -- so `barrier_by_skill` rows carry `downed:
 ///   0` structurally, not because this projection dropped anything.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SkillRow {
     pub skill_id: u32,
     pub name: String,
@@ -441,12 +539,28 @@ pub struct SkillRow {
     pub downed: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EnemyData {
     pub entity_id: u32,
     pub name: String,
+    /// `"red"` / `"green"` / `"blue"` / `"unknown"` -- axilog resolves the
+    /// WvW team id to a colour itself (`axilog_core::wvw::team_color`),
+    /// which is why this crate no longer carries a team-id table.
     pub team: String,
     pub profession: String,
+    /// `blocks.replay.tracks.by_entity[id].samples`, same shape, grid and
+    /// caveats as [`PlayerData::positions`] -- the track roster is WIDER
+    /// than the always-on interval roster and deliberately includes enemy
+    /// players (see `ReplayTrack::down_intervals`'s own doc comment).
+    pub positions: Vec<(f32, f32)>,
+    /// Anchor for `positions`, exactly as [`PlayerData::track_start_ms`].
+    pub track_start_ms: u64,
+    /// `blocks.replay.tracks.by_entity[id].down_intervals` /
+    /// `dead_intervals`. Read off the TRACK rather than
+    /// `blocks.replay.by_entity` because that always-on half covers squad
+    /// players only -- an enemy has no row there at all.
+    pub down_ranges: Vec<(u64, u64)>,
+    pub dead_ranges: Vec<(u64, u64)>,
 }
 
 impl FightData {
@@ -579,6 +693,12 @@ impl FightData {
                         downs: def.map(|d| d.downs_taken).unwrap_or_default(),
                         incoming_cc: def.map(|d| d.received_cc_count).unwrap_or_default(),
                         incoming_strips: def.map(|d| d.boon_strips_taken).unwrap_or_default(),
+                        blocked: def.map(|d| d.blocked_count).unwrap_or_default(),
+                        evaded: def.map(|d| d.evaded_count).unwrap_or_default(),
+                        dodges: def.map(|d| d.dodge_count).unwrap_or_default(),
+                        missed: def.map(|d| d.missed_count).unwrap_or_default(),
+                        interrupted: def.map(|d| d.interrupted_count).unwrap_or_default(),
+                        invulned: def.map(|d| d.invulned_count).unwrap_or_default(),
 
                         applied_cc: cc_row.map(|c| c.applied_total).unwrap_or_default(),
 
@@ -722,6 +842,9 @@ impl FightData {
                                     .collect()
                             })
                             .unwrap_or_default(),
+                        track_start_ms: track_row
+                            .and_then(|t| t.samples.first().map(|(t_ms, _, _)| *t_ms))
+                            .unwrap_or_default(),
                         down_ranges: replay_row.map(|iv| iv.down.clone()).unwrap_or_default(),
                         dead_ranges: replay_row.map(|iv| iv.dead.clone()).unwrap_or_default(),
                         dc_ranges: replay_row.map(|iv| iv.dc.clone()).unwrap_or_default(),
@@ -746,11 +869,29 @@ impl FightData {
                     });
                 }
                 Role::EnemyPlayer => {
+                    let track_row = replay.tracks.as_ref().and_then(|t| t.by_entity.get(e.id));
                     enemies.push(EnemyData {
                         entity_id: e.id,
                         name: e.name.clone().unwrap_or_default(),
                         team: e.team.clone(),
                         profession: e.profession.clone().unwrap_or_default(),
+                        positions: track_row
+                            .map(|t| {
+                                t.samples
+                                    .iter()
+                                    .map(|(_, x, y)| (*x as f32, *y as f32))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        track_start_ms: track_row
+                            .and_then(|t| t.samples.first().map(|(t_ms, _, _)| *t_ms))
+                            .unwrap_or_default(),
+                        down_ranges: track_row
+                            .map(|t| t.down_intervals.clone())
+                            .unwrap_or_default(),
+                        dead_ranges: track_row
+                            .map(|t| t.dead_intervals.clone())
+                            .unwrap_or_default(),
                     });
                 }
                 Role::Npc => {}
@@ -776,6 +917,19 @@ impl FightData {
             entity_index,
             arena,
             healing_available,
+            poll_ms: replay.tracks.as_ref().map(|t| t.poll_ms).unwrap_or_default(),
+            skill_icons: r
+                .catalogs
+                .skills
+                .iter()
+                .filter_map(|(id, e)| e.icon.as_ref().map(|i| (*id, i.clone())))
+                .collect(),
+            buff_icons: r
+                .catalogs
+                .buffs
+                .iter()
+                .filter_map(|(id, e)| e.icon.as_ref().map(|i| (*id, i.clone())))
+                .collect(),
         }
     }
 }

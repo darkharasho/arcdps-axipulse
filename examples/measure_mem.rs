@@ -1,9 +1,15 @@
-//! Host-side memory/timing measurement of the post-EI parse steps,
-//! replaying exactly what `parse_log` does after the subprocess exits
-//! (ISIZE-sized decompress → serde → Derived → slim).
-//! Usage: cargo run --release --example measure_mem -- /tmp/ei-sample.json.gz
+//! Host-side memory/timing measurement of the in-process parse path,
+//! replaying exactly what `plugin::on_new_log` does: axilog parse →
+//! `FightData` projection → `Derived`.
+//!
+//! The point of the measurement is the `ReportV1` drop: it is released
+//! inside `parse_log`, so the retained cost of a fight is the
+//! `FightData` + `Derived` pair alone. That is the whole memory
+//! rationale for the axilog migration, and this is how to check it did
+//! not regress.
+//!
+//! Usage: cargo run --release --example measure_mem -- /path/to/log.zevtc
 
-use std::io::Read;
 use std::time::Instant;
 
 fn rss_mb() -> f64 {
@@ -18,51 +24,39 @@ fn rss_mb() -> f64 {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/ei-sample.json.gz".into());
-    println!("start rss {:6.1} MB", rss_mb());
+    let path = std::env::args().nth(1).unwrap_or_else(|| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/wvw.zevtc").into()
+    });
+    println!("start    rss {:6.1} MB", rss_mb());
 
     let t = Instant::now();
-    let bytes = std::fs::read(&path).expect("read gz");
-    println!("gz read  rss {:6.1} MB  ({} bytes, {:?})", rss_mb(), bytes.len(), t.elapsed());
-
-    let t = Instant::now();
-    let cap = arcdps_axipulse::ei_parser::gzip_isize(&bytes)
-        .filter(|&n| n <= 1_500_000_000)
-        .unwrap_or(bytes.len().saturating_mul(4));
-    let mut decompressed = Vec::with_capacity(cap);
-    {
-        let mut gz = flate2::read::GzDecoder::new(&bytes[..]);
-        gz.read_to_end(&mut decompressed).expect("gunzip");
-    }
-    drop(bytes);
+    let fight = match arcdps_axipulse::parse::parse_log(std::path::Path::new(&path)) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("parse failed: {e}");
+            std::process::exit(1);
+        }
+    };
     println!(
-        "gunzip   rss {:6.1} MB  (len {} cap {} — {:?})",
-        rss_mb(), decompressed.len(), decompressed.capacity(), t.elapsed()
+        "parsed   rss {:6.1} MB  ({} players, {} ms fight, {:?})",
+        rss_mb(),
+        fight.players.len(),
+        fight.duration_ms,
+        t.elapsed(),
     );
 
     let t = Instant::now();
-    let mut json: arcdps_axipulse::ei_model::EiJson =
-        serde_json::from_slice(&decompressed).expect("deserialise");
-    println!("serde    rss {:6.1} MB  ({:?})", rss_mb(), t.elapsed());
-
-    drop(decompressed);
-    println!("dropped buffers rss {:6.1} MB", rss_mb());
-
-    let t = Instant::now();
-    let derived = arcdps_axipulse::derived::Derived::compute(&json);
+    let derived = arcdps_axipulse::derived::Derived::compute(&fight);
     println!("derived  rss {:6.1} MB  ({:?})", rss_mb(), t.elapsed());
 
-    let t = Instant::now();
-    arcdps_axipulse::slim::slim_after_derive(&mut json);
-    println!("slimmed  rss {:6.1} MB  ({:?})", rss_mb(), t.elapsed());
-
-    // Approximate retained size: RSS with tree alive vs after dropping it.
+    // Approximate retained size: RSS with the pair alive vs after
+    // dropping it.
     let before_drop = rss_mb();
-    drop(json);
+    drop(fight);
     drop(derived);
     let after_drop = rss_mb();
     println!(
-        "retained tree ≈ {:6.1} MB (rss {:6.1} → {:6.1}; allocator may hold pages)",
+        "retained fight ≈ {:6.1} MB (rss {:6.1} → {:6.1}; allocator may hold pages)",
         before_drop - after_drop, before_drop, after_drop
     );
 }

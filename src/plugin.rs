@@ -9,14 +9,21 @@ use once_cell::sync::Lazy;
 
 use crate::config::{default_cbtlogs, Config};
 use crate::ei_bundle::{default_install_root, install_from_bytes, BUNDLED_EI_VERSION, BUNDLED_EI_ZIP};
-use crate::ei_parser::{parse_log, ParseError};
 use crate::ei_settings::EiSettings;
 use crate::state::{AppState, FightRecord};
 
 struct Globals {
     state: Mutex<AppState>,
     config: Mutex<Config>,
+    /// Still set at init and still read by `install_root()` for the
+    /// sidecar tile-asset directory. The Elite Insights install it also
+    /// used to point at is no longer parsed from -- migration Task 8
+    /// removes that half.
     install_root: Mutex<Option<PathBuf>>,
+    /// Orphaned by the axilog cutover: nothing reads it now that
+    /// `parse_log` takes no settings. Kept until migration Task 8
+    /// deletes `ei_settings.rs` and the options panel that writes it.
+    #[allow(dead_code)]
     settings: Mutex<EiSettings>,
 }
 
@@ -323,24 +330,23 @@ impl Drop for ParsingGuard {
 fn on_new_log(path: PathBuf) {
     let label = path.file_stem().and_then(|s| s.to_str()).unwrap_or("(log)").to_string();
     let _parsing = ParsingGuard::new(label);
-    let install_root = match G.install_root.lock().ok().and_then(|g| g.clone()) {
-        Some(r) => r,
-        None => { log::warn!("axipulse: on_new_log fired before install_root set"); return; }
-    };
-    let settings = G.settings.lock().ok().map(|s| s.clone()).unwrap_or_default();
     log::warn!("axipulse: parsing {path:?}");
-    match parse_log(&install_root, &settings, &path) {
-        Ok(mut json) => {
+    // In-process, no install root and no Elite Insights settings: the
+    // log bytes go straight into axilog and come back as a `FightData`.
+    // The `ReportV1` behind it is dropped inside `parse_log`, so there
+    // is nothing left to slim afterwards either.
+    match crate::parse::parse_log(&path) {
+        Ok(fight) => {
             // Pre-compute everything heavy the UI used to do per frame.
-            let derived = std::sync::Arc::new(crate::derived::Derived::compute(&json));
-            // Derived has consumed the heavy arrays; collapse what the
-            // per-frame accessors still read so the retained record
-            // stays small (see slim.rs — this is the post-fight-lag fix).
-            crate::slim::slim_after_derive(&mut json);
+            let derived = std::sync::Arc::new(crate::derived::Derived::compute(&fight));
+            // `encounter.map` is the map's own name; there is no
+            // "Detailed WvW - " prefix to strip any more.
+            let map = fight.map_name.clone();
+            let counts = crate::wvw_teams::count_teams(&fight);
             let record = FightRecord {
                 log_path: path,
                 parsed_at: std::time::SystemTime::now(),
-                data: json,
+                data: fight,
                 derived,
             };
             log::warn!(
@@ -349,29 +355,16 @@ fn on_new_log(path: PathBuf) {
                 record.data.duration_ms,
                 record.data.players.len(),
             );
-            // EI's WvW fight_name comes through as "Detailed WvW - <Map>";
-            // strip the prefix so the toast reads just "<Map>".
-            let map = record.data.fight_name
-                .strip_prefix("Detailed WvW - ")
-                .unwrap_or(record.data.fight_name.as_str())
-                .to_string();
-            let counts = crate::wvw_teams::count_teams(&record.data);
             let toast = ParsedToast { map, counts };
             let evicted = match G.state.lock() {
                 Ok(mut s) => s.push_fight(record),
                 Err(_) => Vec::new(),
             };
-            // Free the evicted fight's JSON here, outside the lock.
+            // Free the evicted fight here, outside the lock.
             drop(evicted);
             if let Ok(mut g) = LAST_PARSED.lock() {
                 *g = Some((toast, std::time::Instant::now()));
             }
-            // Arm 120 frames (~2s @ 60fps) of trace output so we can
-            // pinpoint where the host crashes when a new fight first
-            // renders.
-        }
-        Err(ParseError::SubprocessExit { code, stderr }) => {
-            log::warn!("axipulse: parse failed (code={code:?}): {stderr}");
         }
         Err(e) => log::warn!("axipulse: parse failed: {e}"),
     }

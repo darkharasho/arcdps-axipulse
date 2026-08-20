@@ -5,7 +5,7 @@
 //! damage/quickness/alacrity, then utility. Limited list keeps the
 //! row visually scannable.
 
-pub const PANEL_BOON_ORDER: &[i64] = &[
+pub const PANEL_BOON_ORDER: &[u32] = &[
     740,   // Might
     725,   // Fury
     717,   // Protection
@@ -21,7 +21,7 @@ pub const PANEL_BOON_ORDER: &[i64] = &[
 ];
 
 /// Short display name (tooltip text).
-pub fn boon_name(id: i64) -> &'static str {
+pub fn boon_name(id: u32) -> &'static str {
     match id {
         740 => "Might",
         725 => "Fury",

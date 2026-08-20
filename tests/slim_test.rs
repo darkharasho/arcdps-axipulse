@@ -1,9 +1,63 @@
-//! `slim::slim_after_derive` must keep every `pulse_metrics` accessor
-//! bit-identical while collapsing the heavy ext-stat arrays.
+//! `slim::slim_after_derive` must keep every ext-stat accessor
+//! bit-identical while collapsing the heavy arrays.
+//!
+//! **Orphaned alongside `src/slim.rs` and deleted by migration Task 8.**
+//! The accessors below used to live in `crate::pulse_metrics`, which now
+//! reads `FightData`; they are inlined here verbatim so this file keeps
+//! testing exactly what it always did until both go together.
 
 use arcdps_axipulse::ei_model::*;
-use arcdps_axipulse::pulse_metrics as pm;
 use arcdps_axipulse::slim::slim_after_derive;
+
+mod pm {
+    use super::EiPlayer;
+
+    pub fn has_healing_data(p: &EiPlayer) -> bool {
+        p.ext_healing_stats.is_some()
+    }
+
+    pub fn healing(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .map(|h| h.outgoing_healing_allies.iter()
+                .filter_map(|r| r.first().map(|e| e.healing)).sum())
+            .unwrap_or(0)
+    }
+
+    pub fn hps(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .map(|h| h.outgoing_healing_allies.iter()
+                .filter_map(|r| r.first().map(|e| e.hps)).sum())
+            .unwrap_or(0)
+    }
+
+    pub fn healing_downed(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .map(|h| h.outgoing_healing_allies.iter()
+                .filter_map(|r| r.first().map(|e| e.downed_healing)).sum())
+            .unwrap_or(0)
+    }
+
+    pub fn barrier(p: &EiPlayer) -> u64 {
+        p.ext_barrier_stats.as_ref()
+            .map(|h| h.outgoing_barrier_allies.iter()
+                .filter_map(|r| r.first().map(|e| e.barrier)).sum())
+            .unwrap_or(0)
+    }
+
+    pub fn incoming_healing(p: &EiPlayer) -> u64 {
+        p.ext_healing_stats.as_ref()
+            .and_then(|h| h.healing_received_1s.get(0))
+            .and_then(|a| a.last().copied())
+            .unwrap_or(0)
+    }
+
+    pub fn incoming_barrier(p: &EiPlayer) -> u64 {
+        p.ext_barrier_stats.as_ref()
+            .and_then(|h| h.barrier_received_1s.get(0))
+            .and_then(|a| a.last().copied())
+            .unwrap_or(0)
+    }
+}
 
 fn heavy_player() -> EiPlayer {
     EiPlayer {
