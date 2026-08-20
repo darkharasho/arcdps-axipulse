@@ -7,3 +7,6 @@
 src/assets/tiles/
 .env
 graphify-out/
+
+# Superpowers-managed isolated workspaces
+.worktrees/
