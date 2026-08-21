@@ -39,6 +39,13 @@ This repo has no CI build pipeline — the DLL is built locally with
 
 After release notes are approved:
 
+**The version bump MUST land before the build.** `CARGO_PKG_VERSION` is
+baked into the DLL at compile time, and `src/updater.rs` compares it against
+the latest release tag. A DLL built against a stale `Cargo.toml` reports the
+old version forever, so every user's plugin sees itself as out of date and
+re-downloads the same asset on every launch. This is what happened to v0.4.0.
+Never reorder these steps, and never reuse an artifact from an earlier build.
+
 1. If bump type is NOT `none`, edit `Cargo.toml` (`version = "<NEW>"`) and run
    `cargo dll-check` so `Cargo.lock` updates.
 2. Build the DLL — **must succeed before tagging**:
@@ -46,13 +53,20 @@ After release notes are approved:
    cargo dll
    ```
    Artifact path: `target/x86_64-pc-windows-msvc/release/arcdps_axipulse.dll`
-3. Commit release notes + version bump together:
+3. Verify the artifact actually carries the new version — **gate for Job 3**:
+   ```bash
+   ./scripts/verify_release_build.sh <VERSION>
+   ```
+   This fails if `Cargo.toml` is newer than the DLL (build predates the bump)
+   or if the version string is absent from the binary. If it fails, re-run
+   `cargo dll` and verify again. Do NOT tag or upload until it passes.
+4. Commit release notes + version bump together:
    ```bash
    git add RELEASE_NOTES.md Cargo.toml Cargo.lock
    git commit -m "chore: release v<VERSION>"
    git push origin main
    ```
-4. Tag and push (the tag triggers the Discord-post workflow once the
+5. Tag and push (the tag triggers the Discord-post workflow once the
    release is created in Job 3):
    ```bash
    git tag v<VERSION>

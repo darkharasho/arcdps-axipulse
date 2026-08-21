@@ -1,37 +1,18 @@
 # Release Notes
 
-Version v0.4.0 — August 19, 2026
+Version v0.4.1 — August 20, 2026
 
-## The .NET runtime is gone
+## The update prompt that wouldn't go away
 
-AxiPulse used to ship Elite Insights and a whole .NET runtime inside the
-plugin, unpack them to disk on first run, and shell out to them to parse
-every log. All of that is gone. Parsing now happens inside the plugin
-itself, in Rust, with nothing written to disk and no external process
-launched. The DLL dropped from 44.6 MB to 8.5 MB, and the first-run unpack
-delay is gone with it.
+The v0.4.0 download had the wrong version number baked into it — it
+reported itself as 0.3.4. That meant the updater compared itself against
+v0.4.0 on GitHub, decided it was out of date, and re-downloaded the exact
+same file every time you launched the game. It also showed up as 0.3.4 in
+arcdps.log, so there was no way to tell which build you were actually
+running.
 
-## Longer fight history
+This release is the same code as v0.4.0, built with the right version in
+it. Install it once and the update prompt stops coming back.
 
-Fights are stored in a much smaller form now — about 1.1 MB each — so the
-history dropdown keeps the last 32 fights again instead of 8.
-
-## Two new Timeline lanes
-
-Incoming healing and barrier now have their own lanes. If you don't have
-the healing addon installed they say so plainly instead of drawing a flat
-line at zero.
-
-## Nothing is guessed anymore
-
-Anywhere a number couldn't actually be measured, the overlay now shows a
-dash instead of a confident-looking value. A squad member with no health
-data gets an empty bar rather than a full green one, and the Position card
-tells you how many seconds it actually measured when you and the commander
-weren't both being tracked.
-
-NOTE: Two numbers will read differently than they did in v0.3.4. Down
-contribution now follows arcdps's own health-anchored methodology and
-splits into damage, crowd control, debuffs, and healing denied. Healing
-shown is healing you put on other people — your own self-healing is no
-longer folded into the total.
+NOTE: Nothing else changed. If you're on v0.4.0 you already have every
+feature and fix from those notes — only the version stamp was wrong.
