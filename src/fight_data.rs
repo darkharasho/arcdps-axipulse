@@ -395,6 +395,17 @@ pub struct PlayerData {
     pub casts: Vec<CastRow>,
 }
 
+impl PlayerData {
+    /// The class label to show for this player: the elite spec when the
+    /// log named one, else the core profession. [`Self::elite_spec`] is
+    /// empty both for a core-only build and for a spec axilog cannot yet
+    /// name, and the core profession is the honest fallback for either.
+    /// Matches the bundled class-icon keys (see `ui::icons`).
+    pub fn spec_label(&self) -> &str {
+        if self.elite_spec.is_empty() { &self.profession } else { &self.elite_spec }
+    }
+}
+
 /// One cast, `blocks.rotation.by_entity[id].casts[]`. Mirrors the native
 /// `CastRow` field-for-field; carried as its own local type (rather than
 /// re-exporting the native struct) for the same reason every other row
@@ -622,6 +633,10 @@ pub struct EnemyData {
     /// which is why this crate no longer carries a team-id table.
     pub team: String,
     pub profession: String,
+    /// Same split, and the same empty-string ambiguity, as
+    /// [`PlayerData::elite_spec`]. Read [`Self::spec_label`], not this
+    /// field, when you want the class name to render.
+    pub elite_spec: String,
     /// `blocks.replay.tracks.by_entity[id].samples`, same shape, grid and
     /// caveats as [`PlayerData::positions`] -- the track roster is WIDER
     /// than the always-on interval roster and deliberately includes enemy
@@ -635,6 +650,22 @@ pub struct EnemyData {
     /// players only -- an enemy has no row there at all.
     pub down_ranges: Vec<(u64, u64)>,
     pub dead_ranges: Vec<(u64, u64)>,
+}
+
+impl EnemyData {
+    /// [`PlayerData::spec_label`] for an enemy, with one extra fallback:
+    /// when the report names neither profession nor spec, the display
+    /// name is shaped `"<Spec> pl-1992"`, so its first token is the
+    /// best label available.
+    pub fn spec_label(&self) -> &str {
+        if !self.elite_spec.is_empty() {
+            &self.elite_spec
+        } else if !self.profession.is_empty() {
+            &self.profession
+        } else {
+            self.name.split(" pl-").next().unwrap_or("")
+        }
+    }
 }
 
 impl FightData {
@@ -947,6 +978,7 @@ impl FightData {
                         name: e.name.clone().unwrap_or_default(),
                         team: e.team.clone(),
                         profession: e.profession.clone().unwrap_or_default(),
+                        elite_spec: e.elite_spec.clone().unwrap_or_default(),
                         positions: track_row
                             .map(|t| {
                                 t.samples

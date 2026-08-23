@@ -36,7 +36,7 @@ pub fn compute(fight: &FightData, self_idx: usize) -> Vec<Group> {
     let mut ally_count = 0u32;
 
     for p in &fight.players {
-        let spec = if p.elite_spec.is_empty() { p.profession.clone() } else { p.elite_spec.clone() };
+        let spec = p.spec_label().to_string();
         if p.in_squad {
             squad_count += 1;
             *squad_specs.entry(spec).or_insert(0) += 1;
@@ -52,13 +52,12 @@ pub fn compute(fight: &FightData, self_idx: usize) -> Vec<Group> {
     let mut enemy_team_specs: HashMap<String, HashMap<String, u32>> = HashMap::new();
     for e in &fight.enemies {
         if e.team == self_team { continue; }
-        // Enemy `profession` is usually empty. The display name is
-        // shaped like "<Spec> <random>" (e.g. "Tempest pl-1992"), so the
-        // first token is a reasonable best-effort spec label.
-        let spec = if e.profession.is_empty() {
-            e.name.split_whitespace().next().unwrap_or("Unknown").to_string()
-        } else {
-            e.profession.clone()
+        // Spec, then core class, then the "<Spec> pl-1992" display-name
+        // prefix -- see `EnemyData::spec_label`. An enemy with none of
+        // the three is counted as "Unknown" rather than under "".
+        let spec = match e.spec_label() {
+            "" => "Unknown".to_string(),
+            s => s.to_string(),
         };
         *enemy_team_specs.entry(e.team.clone()).or_default().entry(spec).or_insert(0) += 1;
     }

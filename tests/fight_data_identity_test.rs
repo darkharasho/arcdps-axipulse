@@ -62,3 +62,62 @@ fn encounter_scalars_are_populated() {
         assert!(t > 1_600_000_000);
     }
 }
+
+/// The map's roster card and player dots render an icon keyed on a class
+/// name, and the native report splits that name in two: `profession` is
+/// the CORE class, the spec lives in `elite_spec`. Feeding `profession`
+/// straight in made every specced player render as their core class --
+/// `spec_label` is the single accessor that picks correctly.
+#[test]
+fn spec_label_prefers_the_elite_spec_over_the_core_profession() {
+    let f = FightData::from_report(&common::native());
+
+    let specced: Vec<_> = f
+        .players
+        .iter()
+        .filter(|p| p.in_squad && !p.elite_spec.is_empty())
+        .collect();
+    assert!(
+        !specced.is_empty(),
+        "fixture has no specced squad player -- this test would pass vacuously",
+    );
+    for p in &specced {
+        assert_eq!(p.spec_label(), p.elite_spec, "{} fell back to core", p.account);
+        assert_ne!(
+            p.spec_label(),
+            p.profession,
+            "{} rendered as their core class",
+            p.account,
+        );
+    }
+
+    // The fallback is the core class, never an empty label.
+    for p in f.players.iter().filter(|p| p.elite_spec.is_empty()) {
+        assert_eq!(p.spec_label(), p.profession);
+    }
+}
+
+/// Same bug, enemy side: the map's enemy dots and the composition
+/// panel's enemy chips both read `profession` (core) while the fixture's
+/// 46 enemy players all carry an `elite_spec`.
+#[test]
+fn enemy_spec_label_prefers_the_elite_spec_over_the_core_profession() {
+    let f = FightData::from_report(&common::native());
+    let specced: Vec<_> = f.enemies.iter().filter(|e| !e.elite_spec.is_empty()).collect();
+    assert!(
+        !specced.is_empty(),
+        "fixture has no specced enemy -- this test would pass vacuously",
+    );
+    for e in &specced {
+        assert_eq!(e.spec_label(), e.elite_spec, "{} fell back off its spec", e.name);
+    }
+    // Core class before the name prefix; name prefix only as a last resort.
+    for e in f.enemies.iter().filter(|e| e.elite_spec.is_empty()) {
+        let expected = if e.profession.is_empty() {
+            e.name.split(" pl-").next().unwrap_or("")
+        } else {
+            e.profession.as_str()
+        };
+        assert_eq!(e.spec_label(), expected);
+    }
+}

@@ -431,7 +431,7 @@ fn render_party_panel(
         let icon_size = 20.0_f32;
         let icon_x = panel_origin[0] + pad;
         let icon_y = row_y0 + 6.0;
-        if let Some(icon) = crate::ui::icons::lookup_bundled(p.profession.as_str()) {
+        if let Some(icon) = crate::ui::icons::lookup_bundled(p.spec_label()) {
             let (iw, ih) = fit_aspect(icon.aspect, icon_size);
             let cx = icon_x + icon_size * 0.5;
             let cy = icon_y + icon_size * 0.5;
@@ -636,14 +636,9 @@ fn collect_enemy_positions_at_time<'a>(
         if e.positions.is_empty() { continue; }
         let Some((wx, wy)) = lerp_position(&e.positions, e.track_start_ms, time_ms, poll_ms)
         else { continue };
-        // Enemies are named like "Firebrand pl-42"; the prefix before
-        // " pl-N" is the elite-spec display name and matches our
-        // bundled class-icon keys exactly.
-        let prof = if e.profession.is_empty() {
-            e.name.split(" pl-").next().unwrap_or("")
-        } else {
-            e.profession.as_str()
-        };
+        // Spec first, core class second, and only then the " pl-N"
+        // display-name prefix -- see `EnemyData::spec_label`.
+        let prof = e.spec_label();
         // Projected here, one position at a time. Nothing about this
         // enemy's track is compared against anyone else's.
         let (x, y) = arena.project(wx, wy, canvas.0, canvas.1);
@@ -674,7 +669,7 @@ fn collect_positions_at_time<'a>(
         out.push(PlayerDot {
             name: p.character.as_str(),
             account: p.account.as_str(),
-            profession: p.profession.as_str(),
+            profession: p.spec_label(),
             x,
             y,
             is_self: i == self_idx,
