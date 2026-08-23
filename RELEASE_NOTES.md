@@ -1,21 +1,22 @@
 # Release Notes
 
-Version v0.4.2 — August 22, 2026
+Version v0.4.3 — August 23, 2026
 
-## Everyone's showing up as their core class
+## Half your squad showing up as the enemy
 
-Every player and enemy on the map was drawing the base profession icon
-instead of their elite spec — your Firebrand looked like a Guardian, the
-enemy Scourges looked like Necromancers. The log actually reports the
-core class and the spec as two separate things, and the icon lookups were
-reading the wrong one everywhere except the composition panel.
+On some fights the squad got cut clean in half — part of it stayed on
+your side, the rest were drawn as hostiles, and the actual enemy zerg
+vanished from the map entirely. It usually announced itself by the enemy
+suddenly being labelled the wrong team colour.
 
-Fixed for the squad roster card, the player dots, the enemy dots, and the
-enemy chips in the composition panel. Nothing to do on your end — the
-next fight you record will look right.
+The cause was in the parser, not here. It decided who was on your side
+from the *last* team the recording player was seen on, and when you zone
+out of a map at the end of a fight the game stamps you onto a couple of
+other teams on the way out. Whichever one landed last became "your team"
+for the whole log. It now uses the first one instead, which is the one
+you actually fought on.
 
-## Three specs that had no name
-
-Antiquary, Galeshot and Conduit weren't in the parser's spec table yet,
-so anyone playing one fell back to their core class even once the above
-was fixed. They're named now, and their icons were already bundled.
+This was a coin flip on whether a map transition happened to land inside
+the recording — nothing to do with the fight itself — so it hit some
+logs and not others. Any fight you record from here on is fixed; logs you
+already recorded need to be re-opened to pick up the correction.
