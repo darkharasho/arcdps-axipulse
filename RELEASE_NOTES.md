@@ -1,18 +1,21 @@
 # Release Notes
 
-Version v0.4.1 — August 20, 2026
+Version v0.4.2 — August 22, 2026
 
-## The update prompt that wouldn't go away
+## Everyone's showing up as their core class
 
-The v0.4.0 download had the wrong version number baked into it — it
-reported itself as 0.3.4. That meant the updater compared itself against
-v0.4.0 on GitHub, decided it was out of date, and re-downloaded the exact
-same file every time you launched the game. It also showed up as 0.3.4 in
-arcdps.log, so there was no way to tell which build you were actually
-running.
+Every player and enemy on the map was drawing the base profession icon
+instead of their elite spec — your Firebrand looked like a Guardian, the
+enemy Scourges looked like Necromancers. The log actually reports the
+core class and the spec as two separate things, and the icon lookups were
+reading the wrong one everywhere except the composition panel.
 
-This release is the same code as v0.4.0, built with the right version in
-it. Install it once and the update prompt stops coming back.
+Fixed for the squad roster card, the player dots, the enemy dots, and the
+enemy chips in the composition panel. Nothing to do on your end — the
+next fight you record will look right.
 
-NOTE: Nothing else changed. If you're on v0.4.0 you already have every
-feature and fix from those notes — only the version stamp was wrong.
+## Three specs that had no name
+
+Antiquary, Galeshot and Conduit weren't in the parser's spec table yet,
+so anyone playing one fell back to their core class even once the above
+was fixed. They're named now, and their icons were already bundled.
