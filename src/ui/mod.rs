@@ -11,6 +11,7 @@
 
 pub mod axi;
 pub mod map;
+pub mod series;
 pub mod theme;
 
 #[cfg(windows)]

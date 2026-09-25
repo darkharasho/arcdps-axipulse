@@ -27,17 +27,14 @@ pub struct Group {
     pub class_counts: Vec<(String, u32)>,
 }
 
-/// Fallback for Squad/Allies when the log never resolved our own team
-/// colour (PvE, or a WvW log with no team data) -- the green the card
-/// used to hard-code for everyone.
-const NO_TEAM_GREEN: [f32; 4] = [0.29, 0.86, 0.50, 1.0];
-
 /// Our own team's palette colour: Squad wears it directly, Allies wear a
 /// dimmed version so the two stay distinguishable while still reading as
 /// the same side.
 fn home_colors(self_team: &str) -> ([f32; 4], [f32; 4]) {
     let squad = match crate::wvw_teams::team_color(self_team) {
-        crate::wvw_teams::TeamColor::Unknown => NO_TEAM_GREEN,
+        // No resolved team colour (PvE, or a WvW log with no team
+        // data) — the green the card used to hard-code for everyone.
+        crate::wvw_teams::TeamColor::Unknown => crate::ui::series::NO_TEAM,
         c => c.rgba(),
     };
     let allies = [squad[0] * 0.62, squad[1] * 0.62, squad[2] * 0.62, squad[3]];

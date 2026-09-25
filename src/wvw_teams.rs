@@ -35,14 +35,16 @@ impl TeamColor {
         }
     }
 
-    /// axibridge hex palette (#f87171 / #4ade80 / #60a5fa / #9ca3af)
-    /// as normalized RGBA.
+    /// The team's ink. The values live in `ui::series` with the rest of
+    /// the domain palettes; this method keeps its signature and all its
+    /// call sites.
     pub fn rgba(self) -> [f32; 4] {
+        use crate::ui::series;
         match self {
-            TeamColor::Red => [0.973, 0.443, 0.443, 1.0],
-            TeamColor::Green => [0.290, 0.871, 0.502, 1.0],
-            TeamColor::Blue => [0.376, 0.647, 0.980, 1.0],
-            TeamColor::Unknown => [0.612, 0.639, 0.686, 1.0],
+            TeamColor::Red => series::TEAM_RED,
+            TeamColor::Green => series::TEAM_GREEN,
+            TeamColor::Blue => series::TEAM_BLUE,
+            TeamColor::Unknown => series::TEAM_UNKNOWN,
         }
     }
 }
