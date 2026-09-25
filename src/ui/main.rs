@@ -89,7 +89,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         let derived = record.derived.as_ref();
         match tab {
             TopTab::Pulse    => crate::ui::pulse::render_content(ui, fight, idx, derived, accent),
-            TopTab::Timeline => crate::ui::timeline::render_content(ui, fight, idx, derived, &mut config.timeline_layers),
+            TopTab::Timeline => crate::ui::timeline::render_content(ui, fight, idx, derived, accent, &mut config.timeline_layers),
             TopTab::Map      => crate::ui::map::render_content(ui, fight, idx, derived, &record.log_path),
         }
     });

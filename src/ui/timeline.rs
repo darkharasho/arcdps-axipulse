@@ -1,28 +1,23 @@
 #![cfg(windows)]
 //! Timeline tab content — eight stacked swim-lanes + inspector cards.
 //! Outer window lives in `ui::main`.
+//!
+//! No colour literal lives here: chrome comes from `ui::theme` and the
+//! metric inks from `ui::series`. Every lane, tooltip and inspector card
+//! is laid down by `ui::axi` so the block-fill-outline sequence exists
+//! in one place.
 
 use arcdps::imgui::Ui;
 
 use crate::fight_data::FightData;
-
-const BG_CARD:       [f32; 4] = [0.085, 0.10,  0.13,  0.95];
-const BG_CARD_BORDER:[f32; 4] = [1.0, 1.0, 1.0, 0.06];
-const TEXT_PRIMARY:  [f32; 4] = [0.97, 0.97, 1.00, 1.0];
-const TEXT_SECONDARY:[f32; 4] = [0.78, 0.78, 0.85, 1.0];
-const TEXT_MUTED:    [f32; 4] = [0.52, 0.54, 0.62, 1.0];
-
-const COLOR_HEALTH: [f32; 4] = [0.29, 0.86, 0.50, 1.0];
-const COLOR_DMG:    [f32; 4] = [0.95, 0.38, 0.38, 1.0];
-const COLOR_TAKEN:  [f32; 4] = [0.97, 0.55, 0.42, 1.0];
-const COLOR_DIST:   [f32; 4] = [0.95, 0.75, 0.40, 1.0];
-const COLOR_OFF:    [f32; 4] = [0.42, 0.65, 0.94, 1.0];
-const COLOR_DEF:    [f32; 4] = [0.32, 0.78, 0.92, 1.0];
-const COLOR_HEAL_IN:    [f32; 4] = [0.35, 0.88, 0.62, 1.0];
-const COLOR_BARRIER_IN: [f32; 4] = [0.85, 0.72, 0.32, 1.0];
+use crate::ui::axi::{self, Rect};
+use crate::ui::series;
+use crate::ui::theme;
 
 const LANE_LABEL_W: f32 = 92.0;
-const LANE_PAD_Y:   f32 = 2.0;
+/// Gap below a lane. Must exceed OFFSET_CONTROL or the lane's offset
+/// block lands under the next lane's card.
+const LANE_PAD_Y:   f32 = 2.0 + theme::OFFSET_CONTROL;
 const AREA_LANE_H:  f32 = 48.0;
 const BOON_ROW_H:   f32 = 12.0;
 const BOON_GAP:     f32 = 2.0;
@@ -33,10 +28,15 @@ pub fn render_content(
     fight: &FightData,
     idx: usize,
     derived: &crate::derived::Derived,
+    accent: [f32; 4],
     layers: &mut crate::config::TimelineLayers,
 ) {
-    render_layer_toggles(ui, layers);
-    ui.separator();
+    render_layer_toggles(ui, layers, accent);
+    // Our own divider rather than imgui's: rule 5, at hairline weight.
+    let sep = ui.cursor_screen_pos();
+    let sep_w = ui.content_region_avail()[0].max(0.0);
+    axi::rule(ui, [sep[0], sep[1]], [sep[0] + sep_w, sep[1]]);
+    ui.dummy([sep_w, theme::BORDER_HAIRLINE + 4.0]);
     render_time_axis(ui, fight.duration_ms);
 
     // All heavy data was pre-computed once when the fight landed.
@@ -67,36 +67,36 @@ pub fn render_content(
         // absence, not 100% -- see `timeline_health::
         // sample_health_per_second`.
         if health.is_empty() {
-            draw_empty_lane(ui, "Health", COLOR_HEALTH, "no health data");
+            draw_empty_lane(ui, "Health", series::METRIC_HEALTH, "no health data");
         } else {
             let v: Vec<Option<f32>> = health.iter().map(|x| Some(*x as f32)).collect();
-            draw_area_lane(ui, "Health", COLOR_HEALTH, &v, 100.0);
+            draw_area_lane(ui, "Health", series::METRIC_HEALTH, &v, 100.0);
         }
     }
     if layers.damage_dealt {
         let v: Vec<Option<f32>> = dmg_dealt.iter().map(|x| Some(*x as f32)).collect();
-        draw_area_lane_auto(ui, "Dmg Dealt", COLOR_DMG, &v);
+        draw_area_lane_auto(ui, "Dmg Dealt", series::METRIC_DAMAGE, &v);
     }
     if layers.damage_taken {
         let v: Vec<Option<f32>> = dmg_taken.iter().map(|x| Some(*x as f32)).collect();
-        draw_area_lane_auto(ui, "Dmg Taken", COLOR_TAKEN, &v);
+        draw_area_lane_auto(ui, "Dmg Taken", series::METRIC_DAMAGE_TAKEN, &v);
     }
     if layers.distance_to_tag {
         // `all(is_none)` is true for an empty slice too, so this covers
         // both "no commander at all" and "a lane that never resolved a
         // single second".
         if distance.iter().all(Option::is_none) {
-            draw_empty_lane(ui, "Dist Tag", COLOR_DIST, "no commander tagged");
+            draw_empty_lane(ui, "Dist Tag", series::METRIC_DISTANCE, "no commander tagged");
         } else {
             let v: Vec<Option<f32>> = distance.iter().map(|d| d.map(|x| x as f32)).collect();
-            draw_area_lane_auto(ui, "Dist Tag", COLOR_DIST, &v);
+            draw_area_lane_auto(ui, "Dist Tag", series::METRIC_DISTANCE, &v);
         }
     }
     if layers.offensive_boons {
-        draw_boon_lane(ui, "Off Boons", COLOR_OFF, &off, dur);
+        draw_boon_lane(ui, "Off Boons", series::METRIC_OFF_BOONS, &off, dur);
     }
     if layers.defensive_boons {
-        draw_boon_lane(ui, "Def Boons", COLOR_DEF, &def, dur);
+        draw_boon_lane(ui, "Def Boons", series::METRIC_DEF_BOONS, &def, dur);
     }
     // Absent for the WHOLE lane (not one gap at a time) when the log has
     // no healing addon data or this player has no series row -- see
@@ -107,19 +107,19 @@ pub fn render_content(
     if layers.incoming_healing {
         if heal_in.is_empty() {
             let reason = if fight.healing_available { "no data" } else { "no healing addon" };
-            draw_empty_lane(ui, "Heal In", COLOR_HEAL_IN, reason);
+            draw_empty_lane(ui, "Heal In", series::METRIC_HEAL_IN, reason);
         } else {
             let v: Vec<Option<f32>> = heal_in.iter().map(|x| Some(*x as f32)).collect();
-            draw_area_lane_auto(ui, "Heal In", COLOR_HEAL_IN, &v);
+            draw_area_lane_auto(ui, "Heal In", series::METRIC_HEAL_IN, &v);
         }
     }
     if layers.incoming_barrier {
         if barrier_in.is_empty() {
             let reason = if fight.healing_available { "no data" } else { "no healing addon" };
-            draw_empty_lane(ui, "Barrier In", COLOR_BARRIER_IN, reason);
+            draw_empty_lane(ui, "Barrier In", series::METRIC_BARRIER_IN, reason);
         } else {
             let v: Vec<Option<f32>> = barrier_in.iter().map(|x| Some(*x as f32)).collect();
-            draw_area_lane_auto(ui, "Barrier In", COLOR_BARRIER_IN, &v);
+            draw_area_lane_auto(ui, "Barrier In", series::METRIC_BARRIER_IN, &v);
         }
     }
 
@@ -134,8 +134,20 @@ pub fn render_content(
     render_inspector(ui, fight, idx, derived);
 }
 
-fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
-    let pairs: [(&str, &mut bool); 8] = [
+/// The eight lanes as blocked toggle chips — same labels, same order,
+/// same `TimelineLayers` fields the checkboxes wrote. Chips are
+/// clickable, so they lift on hover.
+fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers, accent: [f32; 4]) {
+    let pad = [10.0_f32, 4.0_f32];
+    let h = ui.text_line_height() + pad[1] * 2.0;
+    let origin = ui.cursor_screen_pos();
+    let row_x0 = origin[0];
+    let right = row_x0 + ui.content_region_avail()[0].max(120.0);
+    // A wrapped row must clear the row above it by more than the chips'
+    // offset blocks.
+    let row_step = h + theme::OFFSET_CONTROL + 3.0;
+
+    let mut pairs: [(&str, &mut bool); 8] = [
         ("Health",     &mut layers.health),
         ("Dmg Dealt",  &mut layers.damage_dealt),
         ("Dmg Taken",  &mut layers.damage_taken),
@@ -145,11 +157,36 @@ fn render_layer_toggles(ui: &Ui, layers: &mut crate::config::TimelineLayers) {
         ("Heal In",    &mut layers.incoming_healing),
         ("Barrier In", &mut layers.incoming_barrier),
     ];
-    let n = pairs.len();
-    for (i, (label, value)) in pairs.into_iter().enumerate() {
-        ui.checkbox(label, value);
-        if i + 1 < n { ui.same_line(); }
+
+    let mut pos = origin;
+    let mut rows = 1usize;
+    for (label, value) in pairs.iter_mut() {
+        // `axi::chip` sizes itself the same way; measured here too so
+        // the wrap decision is made before anything is drawn.
+        let want_w = ui.calc_text_size(*label)[0] + pad[0] * 2.0;
+        if pos[0] > row_x0 && pos[0] + want_w + theme::OFFSET_CONTROL > right {
+            pos = [row_x0, pos[1] + row_step];
+            rows += 1;
+        }
+        let (clicked, w) = axi::chip(
+            ui,
+            pos,
+            &format!("tl-layer-{label}"),
+            label,
+            **value,
+            accent,
+            pad,
+        );
+        if clicked { **value = !**value; }
+        // Clear the neighbour's offset block before the next chip.
+        pos = [pos[0] + w + theme::OFFSET_CONTROL + 5.0, pos[1]];
     }
+
+    // Reserve the strip's span with a regular item rather than an
+    // absolute cursor, so the content below it is not overdrawn.
+    let total_h = (rows - 1) as f32 * row_step + h + theme::OFFSET_CONTROL;
+    ui.set_cursor_screen_pos(origin);
+    ui.dummy([right - row_x0, total_h]);
 }
 
 fn render_time_axis(ui: &Ui, duration_ms: u64) {
@@ -167,7 +204,7 @@ fn render_time_axis(ui: &Ui, duration_ms: u64) {
         let label = format_mmss(t_ms);
         let w = ui.calc_text_size(&label)[0];
         let lx = if i == 0 { x } else if i + 1 == tick_count { x - w } else { x - w * 0.5 };
-        draw.add_text([lx, cursor[1]], TEXT_MUTED, &label);
+        draw.add_text([lx, cursor[1]], theme::TEXT_FAINT, &label);
     }
     ui.dummy([avail, ui.text_line_height() + 4.0]);
 }
@@ -198,13 +235,12 @@ fn draw_hover_crosshair(
     let pct = ((mouse[0] - data_x) / data_w).clamp(0.0, 1.0);
     let t_ms = (pct as f64 * duration_ms as f64) as u64;
 
-    {
-        // Scope the draw list so it is released before draw_tooltip
-        // (which re-acquires it) — imgui-rs panics if two are alive.
-        let draw = ui.get_window_draw_list();
-        draw.add_line([mouse[0], top_y], [mouse[0], bottom_y], [1.0, 1.0, 1.0, 0.35])
-            .thickness(1.0).build();
-    }
+    // The crosshair is an annotation (rule 5): theme::RULE at hairline
+    // weight, at full strength (rule 2) rather than washed-out white.
+    // `axi::rule` acquires and releases the draw list inside the call,
+    // so nothing is still alive when draw_tooltip re-acquires it —
+    // imgui-rs panics if two are.
+    axi::rule(ui, [mouse[0], top_y], [mouse[0], bottom_y]);
 
     // Build tooltip rows.
     let sample_idx = |arr_len: usize| -> Option<usize> {
@@ -213,17 +249,17 @@ fn draw_hover_crosshair(
     let mut rows: Vec<(&'static str, [f32; 4], String)> = Vec::new();
     if layers.health {
         if let Some(i) = sample_idx(health.len()) {
-            rows.push(("Health", COLOR_HEALTH, format!("{:.0}%", health[i])));
+            rows.push(("Health", series::METRIC_HEALTH, format!("{:.0}%", health[i])));
         }
     }
     if layers.damage_dealt {
         if let Some(i) = sample_idx(dmg_dealt.len()) {
-            rows.push(("Dmg Dealt", COLOR_DMG, short_value(dmg_dealt[i])));
+            rows.push(("Dmg Dealt", series::METRIC_DAMAGE, short_value(dmg_dealt[i])));
         }
     }
     if layers.damage_taken {
         if let Some(i) = sample_idx(dmg_taken.len()) {
-            rows.push(("Dmg Taken", COLOR_TAKEN, short_value(dmg_taken[i])));
+            rows.push(("Dmg Taken", series::METRIC_DAMAGE_TAKEN, short_value(dmg_taken[i])));
         }
     }
     if layers.distance_to_tag && !distance.iter().all(Option::is_none) {
@@ -234,7 +270,7 @@ fn draw_hover_crosshair(
                 Some(d) => format!("{d:.0}"),
                 None => "—".to_string(),
             };
-            rows.push(("Dist Tag", COLOR_DIST, label));
+            rows.push(("Dist Tag", series::METRIC_DISTANCE, label));
         }
     }
     if layers.offensive_boons {
@@ -242,23 +278,23 @@ fn draw_hover_crosshair(
             .filter(|s| s.segments.iter().any(|seg| seg.start_ms <= t_ms && t_ms < seg.end_ms))
             .map(|s| s.name).collect();
         let label = if active.is_empty() { "none".to_string() } else { active.join(", ") };
-        rows.push(("Off Boons", COLOR_OFF, label));
+        rows.push(("Off Boons", series::METRIC_OFF_BOONS, label));
     }
     if layers.defensive_boons {
         let active: Vec<&str> = def.iter()
             .filter(|s| s.segments.iter().any(|seg| seg.start_ms <= t_ms && t_ms < seg.end_ms))
             .map(|s| s.name).collect();
         let label = if active.is_empty() { "none".to_string() } else { active.join(", ") };
-        rows.push(("Def Boons", COLOR_DEF, label));
+        rows.push(("Def Boons", series::METRIC_DEF_BOONS, label));
     }
     if layers.incoming_healing && !heal_in.is_empty() {
         if let Some(i) = sample_idx(heal_in.len()) {
-            rows.push(("Heal In", COLOR_HEAL_IN, short_value(heal_in[i])));
+            rows.push(("Heal In", series::METRIC_HEAL_IN, short_value(heal_in[i])));
         }
     }
     if layers.incoming_barrier && !barrier_in.is_empty() {
         if let Some(i) = sample_idx(barrier_in.len()) {
-            rows.push(("Barrier In", COLOR_BARRIER_IN, short_value(barrier_in[i])));
+            rows.push(("Barrier In", series::METRIC_BARRIER_IN, short_value(barrier_in[i])));
         }
     }
 
@@ -274,7 +310,9 @@ fn draw_tooltip(
     data_w: f32,
 ) {
     let line_h = ui.text_line_height();
-    let pad = 6.0;
+    // The card's outline sits ON its edge, so the text clears it by
+    // BORDER_CONTROL before its own breathing room.
+    let pad = 6.0 + theme::BORDER_CONTROL;
     let time_label = format_mmss(t_ms);
     let mut max_value_w: f32 = 0.0;
     let mut max_label_w: f32 = 0.0;
@@ -289,36 +327,50 @@ fn draw_tooltip(
     let w = (inner_w.max(header_w)) + pad * 2.0;
     let h = pad + line_h + 4.0 + (rows.len() as f32) * (line_h + row_gap) + pad - row_gap;
 
-    // Position: 12px right of cursor by default; flip left if it would overflow.
+    // Position: 12px right of cursor by default; flip left if it (or its
+    // offset block) would overflow.
     let mut tx = mouse[0] + 12.0;
-    if tx + w > data_x + data_w { tx = mouse[0] - 12.0 - w; }
+    if tx + w + theme::OFFSET_CONTROL > data_x + data_w { tx = mouse[0] - 12.0 - w; }
     let ty = (mouse[1] - h * 0.5).max(0.0);
 
-    let draw = ui.get_window_draw_list();
-    draw.add_rect([tx, ty], [tx + w, ty + h], [0.05, 0.06, 0.08, 0.95])
-        .filled(true).rounding(6.0).build();
-    draw.add_rect([tx, ty], [tx + w, ty + h], [1.0, 1.0, 1.0, 0.10])
-        .rounding(6.0).build();
+    // A tooltip is not clickable, so it never lifts.
+    axi::card(ui, Rect::at([tx, ty], [w, h]), theme::SURFACE_RAISED, false);
 
+    let draw = ui.get_window_draw_list();
     let mut y = ty + pad;
-    draw.add_text([tx + pad, y], TEXT_MUTED, &time_label);
+    draw.add_text([tx + pad, y], theme::TEXT_FAINT, &time_label);
     y += line_h + 4.0;
-    for (label, color, value) in rows {
+    for (label, ink, value) in rows {
         let dot_y = y + (line_h - dot_w) * 0.5;
-        draw.add_rect([tx + pad, dot_y], [tx + pad + dot_w, dot_y + dot_w], *color)
-            .filled(true).rounding(2.0).build();
-        draw.add_text([tx + pad + dot_w + 6.0, y], TEXT_SECONDARY, *label);
+        draw.add_rect([tx + pad, dot_y], [tx + pad + dot_w, dot_y + dot_w], *ink)
+            .filled(true).build();
+        draw.add_text([tx + pad + dot_w + 6.0, y], theme::TEXT_DIM, *label);
         let vw = ui.calc_text_size(value)[0];
-        draw.add_text([tx + w - pad - vw, y], TEXT_PRIMARY, value.as_str());
+        draw.add_text([tx + w - pad - vw, y], theme::TEXT, value.as_str());
         y += line_h + row_gap;
     }
 }
 
-fn draw_area_lane_auto(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option<f32>]) {
+/// A lane's name, right-aligned in the label gutter and vertically
+/// centred on the lane. Uppercase so it reads as an eyebrow like
+/// `axi::label`, but drawn absolutely and in the lane's own metric ink:
+/// the gutter is positioned off the lane rect rather than the cursor,
+/// and the ink is what tells the reader which lane is which.
+fn lane_label(ui: &Ui, gutter_right: f32, lane_y: f32, lane_h: f32, label: &str, ink: [f32; 4]) {
+    let text = label.to_uppercase();
+    let w = ui.calc_text_size(&text)[0];
+    ui.get_window_draw_list().add_text(
+        [gutter_right - w - 6.0, lane_y + (lane_h - ui.text_line_height()) * 0.5],
+        ink,
+        &text,
+    );
+}
+
+fn draw_area_lane_auto(ui: &Ui, label: &str, ink: [f32; 4], samples: &[Option<f32>]) {
     // Scale off the measured values only; an unmeasured second must not
     // influence the axis any more than it influences the curve.
     let max = samples.iter().flatten().copied().fold(1.0_f32, f32::max);
-    draw_area_lane(ui, label, accent, samples, max);
+    draw_area_lane(ui, label, ink, samples, max);
 }
 
 /// `samples[i] == None` is a second with NO value -- the lane leaves a
@@ -326,27 +378,29 @@ fn draw_area_lane_auto(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option
 /// with a straight line between its neighbours. Both would render an
 /// invented measurement; see
 /// `timeline_distance::distance_to_commander_per_second`.
-fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option<f32>], max: f32) {
+fn draw_area_lane(ui: &Ui, label: &str, ink: [f32; 4], samples: &[Option<f32>], max: f32) {
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
     let cursor = ui.cursor_screen_pos();
     let data_x = cursor[0] + LANE_LABEL_W;
     let data_w = avail - LANE_LABEL_W;
     let y = cursor[1];
     let h = AREA_LANE_H;
+
+    lane_label(ui, cursor[0] + LANE_LABEL_W, y, h, label, ink);
+    // A lane is read, not clicked, so its card never lifts.
+    axi::card(ui, Rect::at([data_x, y], [data_w, h]), theme::SURFACE_RAISED, false);
+
     let draw = ui.get_window_draw_list();
-
-    let label_w = ui.calc_text_size(label)[0];
-    draw.add_text([cursor[0] + LANE_LABEL_W - label_w - 6.0, y + (h - ui.text_line_height()) * 0.5], accent, label);
-    draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD).filled(true).rounding(4.0).build();
-    draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD_BORDER).rounding(4.0).build();
-
     if samples.len() >= 1 && max > 0.0 {
         // Rasterise the area in 1-px-wide vertical columns, linearly
         // interpolating between samples. Avoids the blocky look of
         // one-rect-per-sample and the diagonal AA seams that the
         // two-triangle trapezoid fill produces under ImGui's AA.
+        //
+        // The fill is the metric ink at full strength: rule 2, and rule
+        // 7 — the area's height already carries the quantity, so the
+        // alpha has no work left to do.
         let n = samples.len();
-        let mut fill = accent; fill[3] = 0.50;
         let baseline = y + h - 2.0;
         let usable_h = h - 4.0;
         let norm = |v: Option<f32>| -> Option<f32> { v.map(|x| (x / max).clamp(0.0, 1.0)) };
@@ -372,7 +426,7 @@ fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option<f32>
             if baseline - top < 0.5 { continue; }
             // Overlap by 0.5px to prevent hairline gaps between columns
             // under ImGui's edge AA.
-            draw.add_rect([x0, top], [x1 + 0.5, baseline], fill).filled(true).build();
+            draw.add_rect([x0, top], [x1 + 0.5, baseline], ink).filled(true).build();
         }
         // Outline traces the actual samples so the curve reads as a line.
         // A segment with an absent endpoint is skipped, so the line
@@ -387,36 +441,39 @@ fn draw_area_lane(ui: &Ui, label: &str, accent: [f32; 4], samples: &[Option<f32>
                 let xb = data_x + step * i as f32;
                 let ya = y + h - va * usable_h - 2.0;
                 let yb = y + h - vb * usable_h - 2.0;
-                draw.add_line([xa, ya], [xb, yb], accent).thickness(1.1).build();
+                draw.add_line([xa, ya], [xb, yb], ink).thickness(1.1).build();
             }
         }
     }
+    drop(draw);
     ui.dummy([avail, h + LANE_PAD_Y]);
 }
 
-fn draw_empty_lane(ui: &Ui, label: &str, accent: [f32; 4], reason: &str) {
+fn draw_empty_lane(ui: &Ui, label: &str, ink: [f32; 4], reason: &str) {
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
     let cursor = ui.cursor_screen_pos();
     let data_x = cursor[0] + LANE_LABEL_W;
     let data_w = avail - LANE_LABEL_W;
     let y = cursor[1];
     let h = AREA_LANE_H;
-    let draw = ui.get_window_draw_list();
 
-    let label_w = ui.calc_text_size(label)[0];
-    draw.add_text([cursor[0] + LANE_LABEL_W - label_w - 6.0, y + (h - ui.text_line_height()) * 0.5], accent, label);
-    draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD).filled(true).rounding(4.0).build();
-    draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD_BORDER).rounding(4.0).build();
+    lane_label(ui, cursor[0] + LANE_LABEL_W, y, h, label, ink);
+    axi::card(ui, Rect::at([data_x, y], [data_w, h]), theme::SURFACE_RAISED, false);
+
     let rw = ui.calc_text_size(reason)[0];
-    draw.add_text([data_x + (data_w - rw) * 0.5, y + (h - ui.text_line_height()) * 0.5], TEXT_MUTED, reason);
+    ui.get_window_draw_list().add_text(
+        [data_x + (data_w - rw) * 0.5, y + (h - ui.text_line_height()) * 0.5],
+        theme::TEXT_FAINT,
+        reason,
+    );
     ui.dummy([avail, h + LANE_PAD_Y]);
 }
 
 fn draw_boon_lane(
     ui: &Ui,
     label: &str,
-    accent: [f32; 4],
-    series: &[crate::timeline_boons::BoonSeries],
+    ink: [f32; 4],
+    series_rows: &[crate::timeline_boons::BoonSeries],
     duration_ms: u64,
 ) {
     let avail = ui.content_region_avail()[0].max(LANE_LABEL_W + 60.0);
@@ -424,41 +481,36 @@ fn draw_boon_lane(
     let data_x = cursor[0] + LANE_LABEL_W;
     let data_w = avail - LANE_LABEL_W;
     let y = cursor[1];
-    let h_calc = (series.len() as f32) * (BOON_ROW_H + BOON_GAP) + 4.0;
+    let h_calc = (series_rows.len() as f32) * (BOON_ROW_H + BOON_GAP) + 4.0;
     let h = h_calc.max(AREA_LANE_H);
-    let draw = ui.get_window_draw_list();
 
-    let label_w = ui.calc_text_size(label)[0];
-    draw.add_text([cursor[0] + LANE_LABEL_W - label_w - 6.0, y + (h - ui.text_line_height()) * 0.5], accent, label);
-    draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD).filled(true).rounding(4.0).build();
-    draw.add_rect([data_x, y], [data_x + data_w, y + h], BG_CARD_BORDER).rounding(4.0).build();
+    lane_label(ui, cursor[0] + LANE_LABEL_W, y, h, label, ink);
+    axi::card(ui, Rect::at([data_x, y], [data_w, h]), theme::SURFACE_RAISED, false);
 
     if duration_ms == 0 {
         ui.dummy([avail, h + LANE_PAD_Y]);
         return;
     }
 
-    let mut fill = accent; fill[3] = 0.55;
-    for (row, s) in series.iter().enumerate() {
+    let draw = ui.get_window_draw_list();
+    for (row, s) in series_rows.iter().enumerate() {
         let row_y = y + 2.0 + row as f32 * (BOON_ROW_H + BOON_GAP);
         for seg in &s.segments {
             let sx = data_x + data_w * (seg.start_ms.min(duration_ms) as f32 / duration_ms as f32);
             let ex = data_x + data_w * (seg.end_ms.min(duration_ms) as f32 / duration_ms as f32);
             if ex - sx < 1.0 { continue; }
-            draw.add_rect([sx, row_y], [ex, row_y + BOON_ROW_H], fill).filled(true).rounding(2.0).build();
+            // Full strength: a segment's LENGTH is the uptime (rule 7),
+            // so its alpha carries nothing (rule 2).
+            draw.add_rect([sx, row_y], [ex, row_y + BOON_ROW_H], ink).filled(true).build();
         }
         let name_w = ui.calc_text_size(s.name)[0];
         let nudge_y = (BOON_ROW_H - ui.text_line_height()).max(0.0) * 0.5;
-        // Drop-shadow + white label so the name reads on any backing colour.
-        draw.add_text(
-            [data_x + data_w - name_w - 4.0 + 1.0, row_y + nudge_y + 1.0],
-            [0.0, 0.0, 0.0, 0.55], s.name,
-        );
         draw.add_text(
             [data_x + data_w - name_w - 4.0, row_y + nudge_y],
-            TEXT_PRIMARY, s.name,
+            theme::TEXT, s.name,
         );
     }
+    drop(draw);
     ui.dummy([avail, h + LANE_PAD_Y]);
 }
 
@@ -495,13 +547,13 @@ fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::der
         (
             "Ending HP",
             ending_hp.map_or_else(|| "—".to_string(), |hp| format!("{hp:.0}%")),
-            if ending_hp.is_some_and(|hp| hp <= 0.0) { COLOR_DMG } else { COLOR_HEALTH },
+            if ending_hp.is_some_and(|hp| hp <= 0.0) { series::METRIC_DAMAGE } else { series::METRIC_HEALTH },
         ),
-        ("Deaths",    deaths_n.to_string(),         if deaths_n == 0 { COLOR_HEALTH } else { COLOR_DMG }),
-        ("Downs",     downs_n.to_string(),          if downs_n  == 0 { COLOR_HEALTH } else { COLOR_TAKEN }),
-        ("Dmg Taken", short_value(dmg_taken),       COLOR_TAKEN),
+        ("Deaths",    deaths_n.to_string(),         if deaths_n == 0 { series::METRIC_HEALTH } else { series::METRIC_DAMAGE }),
+        ("Downs",     downs_n.to_string(),          if downs_n  == 0 { series::METRIC_HEALTH } else { series::METRIC_DAMAGE_TAKEN }),
+        ("Dmg Taken", short_value(dmg_taken),       series::METRIC_DAMAGE_TAKEN),
     ];
-    draw_inspector_card(ui, start_x, start_y, col_w, card_h, "Health & Survival", COLOR_HEALTH, &health_lines);
+    draw_inspector_card(ui, start_x, start_y, col_w, card_h, "Health & Survival", series::METRIC_HEALTH, &health_lines);
 
     let mut boon_lines: Vec<(&str, String, [f32; 4])> = Vec::new();
     for b in boons.iter() {
@@ -509,19 +561,19 @@ fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::der
             crate::boon_uptime::BoonStacking::Intensity => format!("{:.1} st", b.uptime),
             crate::boon_uptime::BoonStacking::Duration  => format!("{:.0}%", b.uptime),
         };
-        boon_lines.push((b.name, label, COLOR_OFF));
+        boon_lines.push((b.name, label, series::METRIC_OFF_BOONS));
         if boon_lines.len() >= 4 { break; }
     }
     if boon_lines.is_empty() {
-        boon_lines.push(("(no boons)", "—".to_string(), TEXT_MUTED));
+        boon_lines.push(("(no boons)", "—".to_string(), theme::TEXT_FAINT));
     }
-    draw_inspector_card(ui, start_x + col_w + gap, start_y, col_w, card_h, "Boon Uptime", COLOR_OFF, &boon_lines);
+    draw_inspector_card(ui, start_x + col_w + gap, start_y, col_w, card_h, "Boon Uptime", series::METRIC_OFF_BOONS, &boon_lines);
 
     let pos_lines = match dist {
         Some(d) => {
             let mut lines = vec![
-                ("Avg distance", format!("{:.0}", d.avg), COLOR_DIST),
-                ("Max distance", format!("{:.0}", d.max), COLOR_DIST),
+                ("Avg distance", format!("{:.0}", d.avg), series::METRIC_DISTANCE),
+                ("Max distance", format!("{:.0}", d.max), series::METRIC_DISTANCE),
             ];
             if d.is_partial() {
                 // Say so on the card. An average over two thirds of a
@@ -534,16 +586,17 @@ fn render_inspector(ui: &Ui, fight: &FightData, idx: usize, derived: &crate::der
                 lines.push((
                     "Measured",
                     format!("{}s of {}s", d.measured_secs, d.total_secs),
-                    TEXT_MUTED,
+                    theme::TEXT_FAINT,
                 ));
             }
             lines
         }
-        None => vec![("Distance", "no tag".to_string(), TEXT_MUTED)],
+        None => vec![("Distance", "no tag".to_string(), theme::TEXT_FAINT)],
     };
-    draw_inspector_card(ui, start_x + (col_w + gap) * 2.0, start_y, col_w, card_h, "Position", COLOR_DIST, &pos_lines);
+    draw_inspector_card(ui, start_x + (col_w + gap) * 2.0, start_y, col_w, card_h, "Position", series::METRIC_DISTANCE, &pos_lines);
 
-    ui.dummy([avail, card_h]);
+    // Room for the cards' offset blocks below the row.
+    ui.dummy([avail, card_h + theme::OFFSET_CONTROL]);
 }
 
 fn draw_inspector_card(
@@ -553,25 +606,29 @@ fn draw_inspector_card(
     w: f32,
     h: f32,
     title: &str,
-    accent: [f32; 4],
+    ink: [f32; 4],
     lines: &[(&str, String, [f32; 4])],
 ) {
-    let draw = ui.get_window_draw_list();
-    draw.add_rect([x, y], [x + w, y + h], BG_CARD).filled(true).rounding(6.0).build();
-    draw.add_rect([x, y], [x + w, y + h], BG_CARD_BORDER).rounding(6.0).build();
-    // Left accent stripe.
-    draw.add_rect([x, y + 8.0], [x + 3.0, y + h - 8.0], accent).filled(true).rounding(2.0).build();
+    // A card that is read, not clicked: no hover lift.
+    axi::card(ui, Rect::at([x, y], [w, h]), theme::SURFACE_RAISED, false);
 
-    let pad_x = 12.0;
-    let pad_y = 8.0;
+    let draw = ui.get_window_draw_list();
+    // Left stripe, inside the card's own outline, naming the metric.
+    let stripe_x = x + theme::BORDER_CONTROL;
+    draw.add_rect([stripe_x, y + 8.0], [stripe_x + 3.0, y + h - 8.0], ink)
+        .filled(true).build();
+
+    // Text clears the outline before its own breathing room.
+    let pad_x = 12.0 + theme::BORDER_CONTROL;
+    let pad_y = 8.0 + theme::BORDER_CONTROL;
     let line_h = ui.text_line_height();
-    draw.add_text([x + pad_x, y + pad_y], accent, title);
+    draw.add_text([x + pad_x, y + pad_y], ink, title);
 
     let body_y0 = y + pad_y + line_h + 6.0;
     let row_step = (h - (body_y0 - y) - pad_y) / (lines.len().max(1) as f32);
     for (i, (label, value, color)) in lines.iter().enumerate() {
         let row_y = body_y0 + (i as f32) * row_step;
-        draw.add_text([x + pad_x, row_y], TEXT_SECONDARY, *label);
+        draw.add_text([x + pad_x, row_y], theme::TEXT_DIM, *label);
         let vw = ui.calc_text_size(value)[0];
         draw.add_text([x + w - pad_x - vw, row_y], *color, value.as_str());
     }
@@ -584,7 +641,7 @@ fn short_value(n: u64) -> String {
 }
 
 fn section_label(ui: &Ui, label: &str) {
-    ui.text_colored(TEXT_MUTED, label);
+    axi::label(ui, label);
 }
 
 fn format_mmss(ms: u64) -> String {
