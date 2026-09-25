@@ -87,7 +87,7 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
     }
     ui.text_disabled(
         "Persistent stacked bar of red/green/blue player counts from the \
-         latest fight. Compact hides the map header, glow, and legend.",
+         latest fight. Compact hides the map header and legend.",
     );
 
     ui.separator();

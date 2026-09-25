@@ -178,11 +178,18 @@ pub fn render(ui: &Ui, config: &mut Config) {
         // Lay out body segments left-to-right at the second-line y.
         let body_y = cursor[1] + line_h;
         let mut bx = after_icon[0];
-        // Ink is not scaled by the surface's HUD alpha, only by the
-        // toast's own fade — otherwise a fully-visible toast would
-        // draw dim text.
+        // The ink carries the toast's own fade and is NOT scaled by the
+        // surface's HUD alpha: `fade_scale` is pre-divided by ALPHA_HUD
+        // so the surface lands on its exact pre-conversion alpha, and
+        // the ALPHA_HUD factor below undoes that division. Without it a
+        // fully-visible toast would draw dim text.
+        /// The `Parsed` toast's peak surface alpha — the reference the
+        /// ink fade is expressed relative to, so the ink reaches full
+        /// opacity there rather than fading with the HUD constant.
+        const TOAST_PEAK_ALPHA: f32 = 0.75;
+        let ink_fade = (theme::ALPHA_HUD * fade_scale / TOAST_PEAK_ALPHA).min(1.0);
         for (text, color) in &body {
-            let c = theme::with_alpha(*color, color[3] * fade_scale);
+            let c = theme::with_alpha(*color, color[3] * ink_fade);
             draw.add_text([bx, body_y], c, text);
             bx += ui.calc_text_size(text)[0];
         }

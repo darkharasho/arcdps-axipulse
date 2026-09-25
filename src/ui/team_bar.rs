@@ -290,8 +290,8 @@ fn draw_legend(ui: &Ui, counts: TeamCounts, self_color: Option<TeamColor>) {
         for it in &laid {
             // A legend label that identifies a coloured series wears
             // that series' ink (ruling 7), not a ramp step. "You" is
-            // carried by the larger diamond and the "- you" suffix
-            // instead.
+            // carried by the larger diamond and the "· you"
+            // suffix instead.
             draw.add_text([it.tx, origin[1]], it.ink, &it.label);
         }
     }
