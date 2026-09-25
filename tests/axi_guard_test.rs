@@ -238,13 +238,17 @@ fn rounding_args(line: &str) -> Vec<String> {
 /// `theme::rgb(...)` or a bare `rgb(...)`? Matched as a whole call name
 /// (preceded by a non-identifier character or the start of the line) so
 /// it does not fire on `with_alpha(`, which legitimately restates an
-/// existing token's alpha rather than minting a new colour.
+/// existing token's alpha rather than minting a new colour, nor on a
+/// differently-named function that merely ends in `rgb`, such as
+/// `parse_rgb(` or `srgb_to_linear(`'s hypothetical `to_rgb(` — `_` is
+/// an identifier character too, so it must count as "still part of the
+/// previous word" just like a letter or digit does.
 fn contains_rgb_call(line: &str) -> bool {
     for (i, _) in line.match_indices("rgb(") {
         let prev_is_ident = line[..i]
             .chars()
             .next_back()
-            .is_some_and(|c| c.is_ascii_alphanumeric());
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
         if !prev_is_ident {
             return true;
         }
@@ -396,6 +400,24 @@ fn scan_catches_rgb_helper_call() {
         violations.iter().any(|(_, kind, _)| *kind == "rgb"),
         "theme::rgb mints a colour with no array literal at all and must \
          be caught outside ALLOWED files: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_does_not_flag_a_function_merely_named_with_an_rgb_suffix() {
+    let src = "fn parse_rgb(s: &str) -> [f32; 4] { parse_rgb(s) }\n\
+               fn sneaky() -> [f32; 4] { rgb(0x12, 0x34, 0x56) }\n";
+    let violations = scan(src);
+    assert_eq!(
+        violations
+            .iter()
+            .filter(|(_, kind, _)| *kind == "rgb")
+            .count(),
+        1,
+        "parse_rgb's definition and call both end in `rgb(` but are not \
+         the hex-minting helper — `_` counts as an identifier character \
+         just like a letter or digit, so only the bare rgb(...) call on \
+         the second line should be flagged: {violations:?}"
     );
 }
 
