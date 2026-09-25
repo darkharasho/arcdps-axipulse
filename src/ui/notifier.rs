@@ -1,6 +1,8 @@
 #![cfg(windows)]
 //! Notifier toast: a HUD surface, so it fills at `theme::ALPHA_HUD`
-//! (times its own fade) while its ink draws unscaled.
+//! (times its own fade) while its ink draws unscaled by the HUD
+//! constant — the fade it does carry is the whole toast dissolving,
+//! not ink drawn dim.
 //!
 //! Shows "Parsing…" while a log is being parsed and "Parsed: <fight>"
 //! briefly after one lands. Independent of the main AxiPulse window so

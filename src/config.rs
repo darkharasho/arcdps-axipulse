@@ -29,7 +29,7 @@ pub struct Config {
     /// red/green/blue player counts from the latest parsed fight.
     pub show_team_bar: bool,
     pub team_bar_pos: Option<(f32, f32)>,
-    /// Bar-only rendering: no map header, glow strip, or legend.
+    /// Bar-only rendering: no map header or legend.
     pub team_bar_compact: bool,
     /// Background check for a newer release on plugin init.
     pub auto_update_check: bool,

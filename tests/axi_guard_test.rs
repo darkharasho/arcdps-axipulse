@@ -498,3 +498,31 @@ fn scan_still_flags_a_genuine_rounding_violation_on_a_line_with_multibyte_text()
          genuine non-zero rounding violation later on it: {violations:?}"
     );
 }
+
+#[test]
+fn the_conversion_is_complete() {
+    // PENDING is scaffolding for the conversion branch, not a
+    // permanent exemption list. If this fails, a surface was added to
+    // it and never converted — the guard is passing over a file
+    // nobody is guarding, which is the exact failure DEFERRED's
+    // comment warns about.
+    assert!(
+        PENDING.is_empty(),
+        "unconverted surfaces still in PENDING: {PENDING:?}"
+    );
+    // The six converted surfaces are actually being walked.
+    let guarded: Vec<String> = guarded_files().iter().map(|p| rel(p)).collect();
+    for surface in [
+        "src/ui/options.rs",
+        "src/ui/main.rs",
+        "src/ui/pulse.rs",
+        "src/ui/timeline.rs",
+        "src/ui/team_bar.rs",
+        "src/ui/notifier.rs",
+    ] {
+        assert!(
+            guarded.contains(&surface.to_string()),
+            "{surface} is not being guarded; guarded set is {guarded:?}"
+        );
+    }
+}

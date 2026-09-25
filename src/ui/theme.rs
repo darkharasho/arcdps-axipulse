@@ -19,8 +19,11 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {
     [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }
 
-/// Restate a colour at a different alpha. For FILLS only — see
-/// `ALPHA_HUD`. Ink is never scaled.
+/// Restate a colour at a different alpha. For fills against `ALPHA_HUD`
+/// — ink is never scaled by that constant. The one exception is a
+/// whole surface dissolving as a unit (`notifier.rs`'s toast fade),
+/// where the ink is carried along with the surface leaving, not drawn
+/// dim on its own.
 pub const fn with_alpha(c: [f32; 4], a: f32) -> [f32; 4] {
     [c[0], c[1], c[2], a]
 }

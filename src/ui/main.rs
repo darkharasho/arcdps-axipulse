@@ -90,7 +90,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         // line numbers are the pinned fork's imgui-master copy:
         //
         //   cursor_screen_pos() = DC.CursorPos = DC.CursorStartPos
-        //                       = Pos + Pad - Scroll + Deco1        (8003-8006)
+        //                       = Pos + Pad - Scroll + Deco1        (8007)
         //                       = ContentRegionRect.Min             (7990-7991)
         //   content_region_avail() = ContentRegionRect.Max - CursorPos
         //                          = Size - 2*Pad - Deco1 - Deco2   (7992-7993)
