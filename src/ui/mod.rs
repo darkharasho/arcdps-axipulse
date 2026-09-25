@@ -9,6 +9,7 @@
 //! block/outline geometry are host-tested, so only the functions that
 //! touch `Ui` carry gates.
 
+pub mod axi;
 pub mod map;
 pub mod theme;
 

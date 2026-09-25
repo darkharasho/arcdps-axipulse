@@ -134,3 +134,113 @@ fn alpha_policy_splits_by_surface_role_and_never_touches_ink() {
     assert_eq!(theme::TEXT[3], 1.0);
     assert_eq!(theme::TRANSPARENT, [0.0, 0.0, 0.0, 0.0]);
 }
+
+use arcdps_axipulse::ui::axi::{self, Rect};
+
+fn r(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+    Rect::new([x0, y0], [x1, y1])
+}
+
+#[test]
+fn rect_reports_its_own_size() {
+    let a = r(10.0, 20.0, 110.0, 70.0);
+    assert_eq!(a.w(), 100.0);
+    assert_eq!(a.h(), 50.0);
+    let b = Rect::at([10.0, 20.0], [100.0, 50.0]);
+    assert_eq!(b, a);
+}
+
+#[test]
+fn outline_path_insets_by_half_the_stroke_on_all_four_sides() {
+    // imgui centres add_rect stroke on the path: a 4px outline
+    // straddles the edge 2px in and 2px out. An outline flush with its
+    // fill must therefore sit thickness/2 inside. Get this wrong and
+    // every panel wears a 2px halo of ground colour.
+    let fill = r(100.0, 100.0, 300.0, 200.0);
+    let path = axi::outline_path(fill, 4.0);
+    assert_eq!(path, r(102.0, 102.0, 298.0, 198.0));
+    // The stroke's outer edge lands exactly on the fill's edge.
+    assert_eq!(path.min[0] - 2.0, fill.min[0]);
+    assert_eq!(path.min[1] - 2.0, fill.min[1]);
+    assert_eq!(path.max[0] + 2.0, fill.max[0]);
+    assert_eq!(path.max[1] + 2.0, fill.max[1]);
+    // Odd thicknesses land on half-pixels rather than rounding.
+    assert_eq!(axi::outline_path(fill, 3.0), r(101.5, 101.5, 298.5, 198.5));
+}
+
+#[test]
+fn block_path_shifts_down_right_without_resizing() {
+    let fill = r(100.0, 100.0, 300.0, 200.0);
+    let block = axi::block_path(fill, 6.0);
+    assert_eq!(block, r(106.0, 106.0, 306.0, 206.0));
+    assert_eq!(block.w(), fill.w());
+    assert_eq!(block.h(), fill.h());
+}
+
+#[test]
+fn inward_body_leaves_exactly_the_offset_for_the_block() {
+    // The window draw list is clipped to the window rect, so a block
+    // drawn outside the window is cut off. The body shrinks instead,
+    // and its block lands flush with the window's own edge — the same
+    // trick `.axi-window` uses in the desktop app.
+    let window = r(0.0, 0.0, 300.0, 400.0);
+    let body = axi::inward_body(window, 6.0);
+    assert_eq!(body, r(0.0, 0.0, 294.0, 394.0));
+    let block = axi::block_path(body, 6.0);
+    assert_eq!(block.max, window.max);
+    assert!(block.max[0] <= window.max[0] && block.max[1] <= window.max[1]);
+}
+
+#[test]
+fn inward_body_never_inverts_on_a_window_smaller_than_the_offset() {
+    let tiny = r(0.0, 0.0, 4.0, 3.0);
+    let body = axi::inward_body(tiny, 6.0);
+    assert!(body.is_degenerate(), "a window narrower than its own block has no body");
+    assert!(body.max[0] >= body.min[0] && body.max[1] >= body.min[1]);
+}
+
+#[test]
+fn degenerate_rects_are_recognised_rather_than_drawn() {
+    assert!(!r(0.0, 0.0, 10.0, 10.0).is_degenerate());
+    assert!(r(0.0, 0.0, 0.0, 10.0).is_degenerate(), "zero width");
+    assert!(r(0.0, 0.0, 10.0, 0.0).is_degenerate(), "zero height");
+    assert!(r(10.0, 0.0, 0.0, 10.0).is_degenerate(), "inverted");
+    assert!(r(f32::NAN, 0.0, 10.0, 10.0).is_degenerate(), "NaN corner");
+    assert!(r(0.0, 0.0, f32::INFINITY, 10.0).is_degenerate(), "infinite corner");
+}
+
+#[test]
+fn insetting_past_the_middle_collapses_instead_of_inverting() {
+    // A window dragged to 3px wide, outlined at 4px, would otherwise
+    // hand imgui a rect whose min is past its max.
+    let thin = r(0.0, 0.0, 3.0, 40.0);
+    let path = axi::outline_path(thin, 4.0);
+    assert!(path.is_degenerate());
+    assert!(path.max[0] >= path.min[0], "collapsed, not inverted");
+    assert!(path.max[1] >= path.min[1], "collapsed, not inverted");
+}
+
+#[test]
+fn bar_fill_draws_a_quantity_as_length_clamped_to_the_track() {
+    let track = r(0.0, 0.0, 200.0, 20.0);
+    assert_eq!(axi::bar_fill(track, 0.5), r(0.0, 0.0, 100.0, 20.0));
+    assert_eq!(axi::bar_fill(track, 1.0), track);
+    assert!(axi::bar_fill(track, 0.0).is_degenerate());
+    // Over- and under-range fractions clamp rather than overrun the
+    // track or reach back past its left edge.
+    assert_eq!(axi::bar_fill(track, 4.0), track);
+    assert!(axi::bar_fill(track, -3.0).is_degenerate());
+}
+
+#[test]
+fn a_non_finite_fraction_reads_as_empty() {
+    // A zero-duration fight divides by zero. A bar spanning the screen
+    // is worse than an empty one, and a NaN rect is worse than both.
+    let track = r(0.0, 0.0, 200.0, 20.0);
+    for frac in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(axi::clamp_frac(frac), 0.0, "frac {frac}");
+        let fill = axi::bar_fill(track, frac);
+        assert!(fill.is_degenerate());
+        assert!(fill.max[0].is_finite() && fill.max[1].is_finite());
+    }
+}
