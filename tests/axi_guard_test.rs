@@ -42,9 +42,8 @@ const DEFERRED: [&str; 5] = [
 /// entry; the list reaching empty is the conversion being done. Unlike
 /// DEFERRED this is temporary scaffolding — if you are reading this
 /// after the branch merged and it is non-empty, something was skipped.
-const PENDING: [&str; 5] = [
+const PENDING: [&str; 4] = [
     "src/ui/main.rs",
-    "src/ui/pulse.rs",
     "src/ui/timeline.rs",
     "src/ui/team_bar.rs",
     "src/ui/notifier.rs",
