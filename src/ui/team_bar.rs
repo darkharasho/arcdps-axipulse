@@ -233,13 +233,8 @@ fn draw_bar(ui: &Ui, counts: TeamCounts) {
         }
 
         // One near-black outline around the whole bar, over the
-        // segments, its stroke inside the track's edge.
-        let path = axi::outline_path(track, theme::BORDER_CONTROL);
-        if !path.is_degenerate() {
-            draw.add_rect(path.min, path.max, theme::INK_LINE)
-                .thickness(theme::BORDER_CONTROL)
-                .build();
-        }
+        // segments, flush inside the track's edge.
+        axi::outline_on(&draw, track, theme::BORDER_CONTROL, theme::INK_LINE);
     }
 
     ui.dummy([BAR_WIDTH, BAR_HEIGHT]);

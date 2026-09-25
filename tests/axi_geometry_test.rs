@@ -151,21 +151,52 @@ fn rect_reports_its_own_size() {
 }
 
 #[test]
-fn outline_path_insets_by_half_the_stroke_on_all_four_sides() {
-    // imgui centres add_rect stroke on the path: a 4px outline
-    // straddles the edge 2px in and 2px out. An outline flush with its
-    // fill must therefore sit thickness/2 inside. Get this wrong and
-    // every panel wears a 2px halo of ground colour.
-    let fill = r(100.0, 100.0, 300.0, 200.0);
-    let path = axi::outline_path(fill, 4.0);
-    assert_eq!(path, r(102.0, 102.0, 298.0, 198.0));
-    // The stroke's outer edge lands exactly on the fill's edge.
-    assert_eq!(path.min[0] - 2.0, fill.min[0]);
-    assert_eq!(path.min[1] - 2.0, fill.min[1]);
-    assert_eq!(path.max[0] + 2.0, fill.max[0]);
-    assert_eq!(path.max[1] + 2.0, fill.max[1]);
-    // Odd thicknesses land on half-pixels rather than rounding.
-    assert_eq!(axi::outline_path(fill, 3.0), r(101.5, 101.5, 298.5, 198.5));
+fn ring_parts_cover_the_rect_edge_exactly_and_never_overlap() {
+    // Outlines are four filled bands, not a stroke: imgui's AddRect
+    // insets the path it is given by half a pixel before stroking it,
+    // which left a pale hairline of fill outside every outline — and
+    // on the right and bottom, a gap between the outline and its
+    // block. Filled bands have no such fudge.
+    let r0 = r(100.0, 100.0, 300.0, 200.0);
+    let [top, bottom, left, right] = axi::ring_parts(r0, 4.0);
+    assert_eq!(top, r(100.0, 100.0, 300.0, 104.0));
+    assert_eq!(bottom, r(100.0, 196.0, 300.0, 200.0));
+    assert_eq!(left, r(100.0, 104.0, 104.0, 196.0));
+    assert_eq!(right, r(296.0, 104.0, 300.0, 196.0));
+    // Every band's outer edge is ON the rect's edge — nothing of the
+    // fill shows outside the outline.
+    assert_eq!(top.min, r0.min);
+    assert_eq!(bottom.max, r0.max);
+    assert_eq!(left.min[0], r0.min[0]);
+    assert_eq!(right.max[0], r0.max[0]);
+    // The side bands stop short of the top and bottom ones.
+    assert_eq!(left.min[1], top.max[1]);
+    assert_eq!(left.max[1], bottom.min[1]);
+}
+
+#[test]
+fn ring_parts_fill_a_rect_too_thin_to_outline_rather_than_inverting() {
+    // A window dragged to 3px wide, outlined at 4px, would otherwise
+    // hand imgui bands whose min is past their max.
+    let thin = r(0.0, 0.0, 3.0, 40.0);
+    let bands = axi::ring_parts(thin, 4.0);
+    for b in bands {
+        assert!(b.max[0] >= b.min[0] && b.max[1] >= b.min[1], "clamped, not inverted");
+        assert!(b.min[0] >= thin.min[0] && b.max[0] <= thin.max[0], "stays inside");
+    }
+    // Clamped to half the shorter side, the left and right bands meet:
+    // the rect reads as solid outline rather than as a rect with a hole.
+    assert_eq!(bands[2].max[0], bands[3].min[0]);
+}
+
+#[test]
+fn ring_parts_draw_nothing_for_a_non_finite_or_zero_thickness() {
+    let r0 = r(0.0, 0.0, 100.0, 50.0);
+    for t in [0.0, -3.0, f32::NAN] {
+        for b in axi::ring_parts(r0, t) {
+            assert!(b.is_degenerate(), "thickness {t} must draw no band");
+        }
+    }
 }
 
 #[test]
@@ -207,17 +238,6 @@ fn degenerate_rects_are_recognised_rather_than_drawn() {
     assert!(r(10.0, 0.0, 0.0, 10.0).is_degenerate(), "inverted");
     assert!(r(f32::NAN, 0.0, 10.0, 10.0).is_degenerate(), "NaN corner");
     assert!(r(0.0, 0.0, f32::INFINITY, 10.0).is_degenerate(), "infinite corner");
-}
-
-#[test]
-fn insetting_past_the_middle_collapses_instead_of_inverting() {
-    // A window dragged to 3px wide, outlined at 4px, would otherwise
-    // hand imgui a rect whose min is past its max.
-    let thin = r(0.0, 0.0, 3.0, 40.0);
-    let path = axi::outline_path(thin, 4.0);
-    assert!(path.is_degenerate());
-    assert!(path.max[0] >= path.min[0], "collapsed, not inverted");
-    assert!(path.max[1] >= path.min[1], "collapsed, not inverted");
 }
 
 #[test]

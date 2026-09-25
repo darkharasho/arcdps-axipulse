@@ -345,7 +345,7 @@ fn draw_value_bar(
 
     {
         let track = Rect::at(cursor, [avail, row_h]);
-        axi::bar(ui, track, frac, bar_color);
+        let fill_x = axi::bar(ui, track, frac, bar_color);
 
         let draw = ui.get_window_draw_list();
         let pad_left = 6.0 + theme::BORDER_CONTROL;
@@ -362,15 +362,17 @@ fn draw_value_bar(
             text_x += icon_w + 6.0;
         }
         let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
-        draw.add_text([text_x, text_y], theme::TEXT, name);
+        axi::bar_text(&draw, track, fill_x, [text_x, text_y], theme::TEXT, name);
 
         let pad_right = 10.0 + theme::BORDER_CONTROL;
         let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
         let val_w = ui.calc_text_size(value)[0];
         let pct_w = ui.calc_text_size(&pct_label)[0];
-        draw.add_text([cursor[0] + avail - pad_right - val_w, text_y], theme::TEXT, value);
+        axi::bar_text(&draw, track, fill_x,
+                      [cursor[0] + avail - pad_right - val_w, text_y], theme::TEXT, value);
         if !pct_label.is_empty() {
-            draw.add_text(
+            axi::bar_text(
+                &draw, track, fill_x,
                 [cursor[0] + avail - pad_right - val_w - 14.0 - pct_w, text_y],
                 theme::TEXT_DIM, &pct_label,
             );
@@ -599,7 +601,7 @@ fn draw_skill_bar(
 
     {
         let track = Rect::at(cursor, [avail, row_h]);
-        axi::bar(ui, track, frac, series::METRIC_DAMAGE);
+        let fill_x = axi::bar(ui, track, frac, series::METRIC_DAMAGE);
 
         let draw = ui.get_window_draw_list();
         let pad_left = 6.0 + theme::BORDER_CONTROL;
@@ -616,15 +618,17 @@ fn draw_skill_bar(
             text_x += icon_w + 6.0;
         }
         let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
-        draw.add_text([text_x, text_y], theme::TEXT, name);
+        axi::bar_text(&draw, track, fill_x, [text_x, text_y], theme::TEXT, name);
 
         let pad_right = 10.0 + theme::BORDER_CONTROL;
         let pct_label = if pct >= 0.1 { format!("{:.1}%", pct) } else { String::new() };
         let val_w = ui.calc_text_size(value)[0];
         let pct_w = ui.calc_text_size(&pct_label)[0];
-        draw.add_text([cursor[0] + avail - pad_right - val_w, text_y], theme::TEXT, value);
+        axi::bar_text(&draw, track, fill_x,
+                      [cursor[0] + avail - pad_right - val_w, text_y], theme::TEXT, value);
         if !pct_label.is_empty() {
-            draw.add_text(
+            axi::bar_text(
+                &draw, track, fill_x,
                 [cursor[0] + avail - pad_right - val_w - 14.0 - pct_w, text_y],
                 theme::TEXT_DIM, &pct_label,
             );
@@ -644,7 +648,7 @@ fn draw_boon_bar(ui: &Ui, fight: &FightData, id: u32, name: &str, frac: f32, lab
 
     {
         let track = Rect::at(cursor, [avail, row_h]);
-        axi::bar(ui, track, frac, color);
+        let fill_x = axi::bar(ui, track, frac, color);
 
         let draw = ui.get_window_draw_list();
         let pad_left = 6.0 + theme::BORDER_CONTROL;
@@ -670,12 +674,13 @@ fn draw_boon_bar(ui: &Ui, fight: &FightData, id: u32, name: &str, frac: f32, lab
             text_x = cursor[0] + 14.0 + theme::BORDER_CONTROL;
         }
         let text_y = cursor[1] + (row_h - ui.text_line_height()) * 0.5;
-        draw.add_text([text_x, text_y], theme::TEXT, name);
+        axi::bar_text(&draw, track, fill_x, [text_x, text_y], theme::TEXT, name);
 
         let pad_right = 14.0 + theme::BORDER_CONTROL;
         let label_w = ui.calc_text_size(label)[0];
-        draw.add_text([cursor[0] + avail - pad_right - label_w, text_y],
-                       theme::TEXT, label);
+        axi::bar_text(&draw, track, fill_x,
+                      [cursor[0] + avail - pad_right - label_w, text_y],
+                      theme::TEXT, label);
     }
 
     ui.set_cursor_screen_pos(cursor);
@@ -713,11 +718,7 @@ fn render_fight_composition(ui: &Ui, derived: &Derived) {
             // to be "corrected" into a full-width wash.
             let draw = ui.get_window_draw_list();
             draw.add_rect(track.min, track.max, theme::GROUND).filled(true).build();
-            let path = axi::outline_path(track, theme::BORDER_CONTROL);
-            if !path.is_degenerate() {
-                draw.add_rect(path.min, path.max, theme::INK_LINE)
-                    .thickness(theme::BORDER_CONTROL).build();
-            }
+            axi::outline_on(&draw, track, theme::BORDER_CONTROL, theme::INK_LINE);
             let inner = track.inset(theme::BORDER_CONTROL);
             let mut x = inner.min[0];
             let seg_gap = 2.0;
