@@ -471,3 +471,36 @@ fn scan_flags_nonzero_rounding_and_allows_zero() {
         "expected exactly one non-zero rounding violation: {violations:?}"
     );
 }
+
+#[test]
+fn rounding_args_does_not_panic_on_multibyte_characters_before_the_call() {
+    // "€" is 3 bytes (U+20AC) and "🎉" is 4 bytes (U+1F389). The old
+    // implementation walked the line one *byte* at a time and re-sliced
+    // from that raw index on every step, so it would land inside one of
+    // these characters' byte sequences and panic long before ever
+    // reaching the real `rounding(` call further down the line.
+    let line = "€🎉 a.rounding(4.0).build();";
+    let args = rounding_args(line);
+    assert_eq!(
+        args,
+        vec!["4.0".to_string()],
+        "multi-byte characters ahead of the call must not disrupt \
+         detection of the call's own argument: {args:?}"
+    );
+}
+
+#[test]
+fn scan_still_flags_a_genuine_rounding_violation_on_a_line_with_multibyte_text() {
+    // Same hazard as above, but through the public `scan` entry point,
+    // and pinning that a real violation is still detected — not just
+    // that the line is scanned without panicking.
+    let src = "ui.text(\"€🎉\"); a.rounding(5.0).build();\n";
+    let violations = scan(src);
+    assert!(
+        violations
+            .iter()
+            .any(|(_, kind, detail)| *kind == "rounding" && detail == "rounding(5.0)"),
+        "a multi-byte string literal earlier on the line must not mask a \
+         genuine non-zero rounding violation later on it: {violations:?}"
+    );
+}
