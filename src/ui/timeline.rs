@@ -15,12 +15,16 @@ use crate::ui::series;
 use crate::ui::theme;
 
 const LANE_LABEL_W: f32 = 92.0;
-/// Gap below a lane. Must exceed OFFSET_CONTROL or the lane's offset
-/// block lands under the next lane's card.
-const LANE_PAD_Y:   f32 = 2.0 + theme::OFFSET_CONTROL;
+/// Gap below a lane, on top of the window's own ItemSpacing — the
+/// lanes are laid out as regular items, so the 8px spacing pushed in
+/// `ui::main` already clears each lane's offset block.
+const LANE_PAD_Y:   f32 = 2.0;
 const AREA_LANE_H:  f32 = 48.0;
 const BOON_ROW_H:   f32 = 12.0;
 const BOON_GAP:     f32 = 2.0;
+/// Symmetric padding on the plate behind a boon-row name.
+const PLATE_PAD_X:  f32 = 2.0;
+const PLATE_PAD_Y:  f32 = 1.0;
 
 /// Render the Timeline tab contents (no window — caller owns that).
 pub fn render_content(
@@ -352,10 +356,17 @@ fn draw_tooltip(
 }
 
 /// A lane's name, right-aligned in the label gutter and vertically
-/// centred on the lane. Uppercase so it reads as an eyebrow like
-/// `axi::label`, but drawn absolutely and in the lane's own metric ink:
-/// the gutter is positioned off the lane rect rather than the cursor,
-/// and the ink is what tells the reader which lane is which.
+/// centred on the lane. Uppercase so it reads as an eyebrow, but NOT
+/// `axi::label`, and the reason is the ink: this is the lane's legend
+/// entry, so it wears its own series' colour under the domain-palette
+/// carve-out. It is the only lane-to-colour mapping in the tab, and
+/// `axi::label`'s `TEXT_FAINT` would delete it. Rule 5 governs shapes
+/// (filled = status, outlined = annotation), not label text, and rule
+/// 9's "a chart's ink is the accent" is about the chart body, which
+/// here is the domain palette by design.
+///
+/// Secondary, practical: `axi::label` draws at the cursor, whereas the
+/// gutter is positioned off the lane rect.
 fn lane_label(ui: &Ui, gutter_right: f32, lane_y: f32, lane_h: f32, label: &str, ink: [f32; 4]) {
     let text = label.to_uppercase();
     let w = ui.calc_text_size(&text)[0];
@@ -503,12 +514,30 @@ fn draw_boon_lane(
             // so its alpha carries nothing (rule 2).
             draw.add_rect([sx, row_y], [ex, row_y + BOON_ROW_H], ink).filled(true).build();
         }
+        // The name sits at a fixed offset from the lane's right edge, so
+        // depending on uptime it lands on a full-strength segment or on
+        // the bare card. A hard INK_LINE plate behind it makes TEXT
+        // legible on both — this language separates a label from a
+        // bright fill with a block, never with a blur.
         let name_w = ui.calc_text_size(s.name)[0];
-        let nudge_y = (BOON_ROW_H - ui.text_line_height()).max(0.0) * 0.5;
-        draw.add_text(
-            [data_x + data_w - name_w - 4.0, row_y + nudge_y],
-            theme::TEXT, s.name,
+        let line_h = ui.text_line_height();
+        let nudge_y = (BOON_ROW_H - line_h).max(0.0) * 0.5;
+        let tx = data_x + data_w - name_w - 4.0;
+        let ty = row_y + nudge_y;
+        // Clamped to this boon's own row band and to the lane's left
+        // edge, so a tall glyph line or an over-long name cannot paint
+        // the plate over a neighbouring row or outside the card.
+        let plate = Rect::new(
+            [(tx - PLATE_PAD_X).max(data_x), (ty - PLATE_PAD_Y).max(row_y)],
+            [
+                tx + name_w + PLATE_PAD_X,
+                (ty + line_h + PLATE_PAD_Y).min(row_y + BOON_ROW_H),
+            ],
         );
+        if !plate.is_degenerate() {
+            draw.add_rect(plate.min, plate.max, theme::INK_LINE).filled(true).build();
+        }
+        draw.add_text([tx, ty], theme::TEXT, s.name);
     }
     drop(draw);
     ui.dummy([avail, h + LANE_PAD_Y]);
