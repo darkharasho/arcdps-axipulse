@@ -21,6 +21,14 @@ const ALLOWED: [&str; 2] = ["src/ui/theme.rs", "src/ui/series.rs"];
 /// as a deferral, so it is converted whole later or not at all. When it
 /// is converted, delete these entries — do not add to them.
 ///
+/// Only `src/ui/map.rs` is load-bearing today: `ROOTS` is `src/ui`, so
+/// the four `src/map/` entries below are never walked in the first
+/// place and this list is not "five files actively skipped". They stay
+/// listed anyway — if `ROOTS` is ever widened to include `src/map`, the
+/// exclusion is already in place and already explained, and
+/// `the_exclusion_lists_still_point_at_real_files` keeps them honest in
+/// the meantime.
+///
 /// See the residuals note in `docs/superpowers/`.
 const DEFERRED: [&str; 5] = [
     "src/ui/map.rs",
@@ -99,29 +107,86 @@ fn guarded_files() -> Vec<PathBuf> {
     found
 }
 
-/// Is this a four-component float array — i.e. a colour?
+/// Is this a colour? Exactly four comma-separated components, at least
+/// three of which parse as `f32`.
 ///
-/// Deliberately narrow: exactly four comma-separated components that
-/// all parse as `f32`. `[0.0, 4.0]` (a two-component imgui vec) and
-/// `[x, y, w, h]` (identifiers) are not colours and are not flagged.
+/// Exactly four rules out `[0.0, 4.0]` (a two-component imgui vec) and
+/// `[x, y, w, h]` (an all-identifier rect). "At least three" (rather
+/// than "all four") is what catches `[0.5, 0.5, 0.5, SOME_ALPHA_CONST]`
+/// — a literal RGB triplet with a named alpha component is still a
+/// colour literal wearing a disguise.
 fn is_colour_literal(body: &str) -> bool {
-    let parts: Vec<&str> = body.split(',').map(str::trim).collect();
-    parts.len() == 4 && parts.iter().all(|p| p.parse::<f32>().is_ok())
+    // rustfmt routinely leaves a trailing comma on a wrapped array
+    // literal (`[\n    0.1, 0.2, 0.3, 1.0,\n]`); strip it before
+    // splitting so that does not masquerade as a fifth, unparseable
+    // component.
+    let trimmed = body.trim().trim_end_matches(',');
+    let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+    if parts.len() != 4 {
+        return false;
+    }
+    parts.iter().filter(|p| p.parse::<f32>().is_ok()).count() >= 3
 }
 
-/// Every top-level `[...]` body on a line, without nesting.
-fn bracket_bodies(line: &str) -> Vec<String> {
+/// Comment and string content confuse every rule here, so lines that
+/// are wholly a comment are skipped. A colour literal hiding inside a
+/// doc comment is not a colour the plugin draws.
+fn is_comment(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("//") || t.starts_with("*") || t.starts_with("/*")
+}
+
+/// Blank out whole-line comments and lines carrying the opt-out marker,
+/// preserving line count (and therefore line numbers) so downstream
+/// scanning can still report an accurate line.
+fn strip_ignored_lines(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            if is_comment(line) || line.contains(ALLOW_MARKER) {
+                String::new()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every top-level `[...]` body in the whole file, paired with the line
+/// on which its `[` opened. Tracking depth across the entire text
+/// (rather than resetting per line) is what catches a colour literal
+/// that rustfmt has wrapped across multiple lines, e.g.:
+///
+/// ```ignore
+/// const CANARY: [f32; 4] = [
+///     0.11, 0.22, 0.33, 1.0,
+/// ];
+/// ```
+fn bracket_bodies(text: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut buf = String::new();
-    for ch in line.chars() {
+    let mut open_line = 0usize;
+    let mut line_no = 1usize;
+    for ch in text.chars() {
         match ch {
+            '\n' => {
+                line_no += 1;
+                if depth >= 1 {
+                    buf.push('\n');
+                }
+            }
             '[' => {
                 depth += 1;
-                if depth == 1 { buf.clear(); }
+                if depth == 1 {
+                    buf.clear();
+                    open_line = line_no;
+                }
             }
             ']' => {
-                if depth == 1 { out.push(buf.clone()); }
+                if depth == 1 {
+                    out.push((open_line, buf.clone()));
+                }
                 depth = depth.saturating_sub(1);
             }
             _ if depth >= 1 => buf.push(ch),
@@ -151,7 +216,10 @@ fn rounding_args(line: &str) -> Vec<String> {
                 '(' => depth += 1,
                 ')' => {
                     depth -= 1;
-                    if depth == 0 { end = Some(open + off); break; }
+                    if depth == 0 {
+                        end = Some(open + off);
+                        break;
+                    }
                 }
                 _ => {}
             }
@@ -166,12 +234,62 @@ fn rounding_args(line: &str) -> Vec<String> {
     out
 }
 
-/// Comment and string content confuse every rule here, so lines that
-/// are wholly a comment are skipped. A colour literal hiding inside a
-/// doc comment is not a colour the plugin draws.
-fn is_comment(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with("//") || t.starts_with("*") || t.starts_with("/*")
+/// Does this line call the hex-minting helper `rgb(...)`, e.g. via
+/// `theme::rgb(...)` or a bare `rgb(...)`? Matched as a whole call name
+/// (preceded by a non-identifier character or the start of the line) so
+/// it does not fire on `with_alpha(`, which legitimately restates an
+/// existing token's alpha rather than minting a new colour.
+fn contains_rgb_call(line: &str) -> bool {
+    for (i, _) in line.match_indices("rgb(") {
+        let prev_is_ident = line[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+        if !prev_is_ident {
+            return true;
+        }
+    }
+    false
+}
+
+/// Scan one file's text for contract violations. Pure: takes source,
+/// returns `(line, kind, detail)` per violation. Unit-tested below
+/// against inline fixtures, so the scanner's own blind spots are
+/// regression-tested rather than rediscovered by hand. `kind` is one of
+/// `"colour"`, `"rgb"`, or `"rounding"`; callers decide which kinds
+/// apply to a given file (e.g. `ALLOWED` exempts `"colour"` and
+/// `"rgb"`, never `"rounding"`).
+fn scan(text: &str) -> Vec<(usize, &'static str, String)> {
+    let mut violations = Vec::new();
+
+    for (n, line) in text.lines().enumerate() {
+        if is_comment(line) || line.contains(ALLOW_MARKER) {
+            continue;
+        }
+        for arg in rounding_args(line) {
+            let square = arg == "0.0" || arg == "0" || arg == "0.0_f32";
+            if !square {
+                violations.push((n + 1, "rounding", format!("rounding({arg})")));
+            }
+        }
+        if contains_rgb_call(line) {
+            violations.push((
+                n + 1,
+                "rgb",
+                "mints a colour via theme::rgb; chrome colours belong in theme.rs".to_string(),
+            ));
+        }
+    }
+
+    let stripped = strip_ignored_lines(text);
+    for (line_no, body) in bracket_bodies(&stripped) {
+        if is_colour_literal(&body) {
+            let display = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            violations.push((line_no, "colour", format!("[{display}]")));
+        }
+    }
+
+    violations
 }
 
 #[test]
@@ -180,13 +298,12 @@ fn no_colour_literal_lives_outside_theme_and_series() {
     for path in guarded_files() {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-        if ALLOWED.contains(&rel(&path).as_str()) { continue; }
-        for (n, line) in text.lines().enumerate() {
-            if is_comment(line) || line.contains(ALLOW_MARKER) { continue; }
-            for body in bracket_bodies(line) {
-                if is_colour_literal(&body) {
-                    violations.push(format!("{}:{}: [{}]", rel(&path), n + 1, body.trim()));
-                }
+        if ALLOWED.contains(&rel(&path).as_str()) {
+            continue;
+        }
+        for (line, kind, detail) in scan(&text) {
+            if kind == "colour" || kind == "rgb" {
+                violations.push(format!("{}:{}: {}", rel(&path), line, detail));
             }
         }
     }
@@ -208,13 +325,9 @@ fn every_corner_is_square() {
     for path in guarded_files() {
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-        for (n, line) in text.lines().enumerate() {
-            if is_comment(line) || line.contains(ALLOW_MARKER) { continue; }
-            for arg in rounding_args(line) {
-                let square = arg == "0.0" || arg == "0" || arg == "0.0_f32";
-                if !square {
-                    violations.push(format!("{}:{}: rounding({arg})", rel(&path), n + 1));
-                }
+        for (line, kind, detail) in scan(&text) {
+            if kind == "rounding" {
+                violations.push(format!("{}:{}: {}", rel(&path), line, detail));
             }
         }
     }
@@ -254,5 +367,79 @@ fn the_guard_is_actually_guarding_something() {
         "only {} file(s) guarded — check ROOTS and the exclusion lists: {:?}",
         files.len(),
         files.iter().map(|p| rel(p)).collect::<Vec<_>>()
+    );
+}
+
+// --- Scanner self-tests -----------------------------------------------
+//
+// Each of these is a bypass a reviewer demonstrated live against an
+// earlier version of `scan`. They stay here so the scanner's own blind
+// spots are regression-tested rather than rediscovered by hand next
+// time someone touches it.
+
+#[test]
+fn scan_catches_multiline_colour_literal() {
+    let src = "const CANARY: [f32; 4] = [\n    0.11, 0.22, 0.33, 1.0,\n];\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().any(|(_, kind, _)| *kind == "colour"),
+        "rustfmt wraps long array literals across lines; a colour split \
+         across lines must still be caught: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_catches_rgb_helper_call() {
+    let src = "fn sneaky() -> [f32; 4] { crate::ui::theme::rgb(0x12, 0x34, 0x56) }\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().any(|(_, kind, _)| *kind == "rgb"),
+        "theme::rgb mints a colour with no array literal at all and must \
+         be caught outside ALLOWED files: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_does_not_flag_with_alpha() {
+    let src = "let c = theme::ACCENT.with_alpha(0.5);\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().all(|(_, kind, _)| *kind != "rgb"),
+        "with_alpha restates an existing token's alpha and must not be \
+         treated as colour-minting: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_catches_mixed_named_alpha_colour() {
+    let src = "const C: [f32; 4] = [0.5, 0.5, 0.5, SOME_ALPHA_CONST];\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().any(|(_, kind, _)| *kind == "colour"),
+        "a literal RGB triplet with a named alpha component is still a \
+         colour literal: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_does_not_flag_non_colour_arrays() {
+    let src = "let rect = [x, y, w, h];\nlet point = [0.0, 4.0];\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().all(|(_, kind, _)| *kind != "colour"),
+        "an all-identifier rect and a two-component imgui vec are not \
+         colours: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_flags_nonzero_rounding_and_allows_zero() {
+    let src = "a.rounding(4.0).build();\nb.rounding(0.0).build();\n";
+    let violations = scan(src);
+    let rounding: Vec<_> = violations.iter().filter(|(_, k, _)| *k == "rounding").collect();
+    assert_eq!(
+        rounding.len(),
+        1,
+        "expected exactly one non-zero rounding violation: {violations:?}"
     );
 }
