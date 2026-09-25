@@ -16,6 +16,13 @@ use crate::ui::theme;
 /// How long the "Parsed: …" toast lingers after a parse completes.
 const PARSED_LINGER_SECS: f32 = 6.0;
 
+/// The `Parsed` toast's peak surface alpha. Load-bearing in two places:
+/// it is the peak the fade ramps to, and it is the reference the body
+/// ink's fade is expressed relative to, so the ink reaches full opacity
+/// exactly when the surface is at its peak. One constant, so the two
+/// cannot drift apart.
+const TOAST_PEAK_ALPHA: f32 = 0.75;
+
 pub fn render(ui: &Ui, config: &mut Config) {
     if !config.show_notifications { return; }
 
@@ -72,7 +79,7 @@ pub fn render(ui: &Ui, config: &mut Config) {
             // Linear fade across the final 1.5s of the linger window,
             // unchanged.
             let remain = (PARSED_LINGER_SECS - age).max(0.0);
-            let scale = (remain / 1.5).min(1.0) * (0.75 / theme::ALPHA_HUD);
+            let scale = (remain / 1.5).min(1.0) * (TOAST_PEAK_ALPHA / theme::ALPHA_HUD);
             let mut segs: Vec<(String, [f32; 4])> = Vec::new();
             // Per-team counts in the team bar's palette and order, so
             // the toast never disagrees with the widget.
@@ -183,10 +190,6 @@ pub fn render(ui: &Ui, config: &mut Config) {
         // so the surface lands on its exact pre-conversion alpha, and
         // the ALPHA_HUD factor below undoes that division. Without it a
         // fully-visible toast would draw dim text.
-        /// The `Parsed` toast's peak surface alpha — the reference the
-        /// ink fade is expressed relative to, so the ink reaches full
-        /// opacity there rather than fading with the HUD constant.
-        const TOAST_PEAK_ALPHA: f32 = 0.75;
         let ink_fade = (theme::ALPHA_HUD * fade_scale / TOAST_PEAK_ALPHA).min(1.0);
         for (text, color) in &body {
             let c = theme::with_alpha(*color, color[3] * ink_fade);
