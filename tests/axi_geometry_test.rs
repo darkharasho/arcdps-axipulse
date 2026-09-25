@@ -209,6 +209,48 @@ fn block_path_shifts_down_right_without_resizing() {
 }
 
 #[test]
+fn block_parts_cover_the_shifted_rect_outside_the_face_and_nothing_inside_it() {
+    // A translucent face must sit on one backdrop, so no part of the
+    // block may be painted where the face will land on top of it.
+    let face = r(100.0, 100.0, 300.0, 200.0);
+    let [right, bottom] = axi::block_parts(face, 6.0);
+    assert_eq!(right, r(300.0, 106.0, 306.0, 206.0));
+    assert_eq!(bottom, r(106.0, 200.0, 300.0, 206.0));
+    for band in [right, bottom] {
+        assert!(
+            band.min[0] >= face.max[0] || band.min[1] >= face.max[1],
+            "{band:?} overlaps the face it sits behind",
+        );
+    }
+    // The two bands tile the visible block exactly: their areas sum to
+    // the shifted rect's area minus the part hidden under the face.
+    let hidden = (face.w() - 6.0) * (face.h() - 6.0);
+    let drawn = right.w() * right.h() + bottom.w() * bottom.h();
+    assert_eq!(drawn, face.w() * face.h() - hidden);
+}
+
+#[test]
+fn block_parts_keep_the_whole_block_when_the_offset_clears_the_face() {
+    // An offset bigger than the rect leaves the block fully detached.
+    // The right band must then take all of it rather than the two
+    // bands together dropping the corner.
+    let tiny = r(0.0, 0.0, 4.0, 3.0);
+    let [right, bottom] = axi::block_parts(tiny, 6.0);
+    assert_eq!(right, axi::block_path(tiny, 6.0));
+    assert!(bottom.is_degenerate());
+}
+
+#[test]
+fn block_parts_draw_nothing_for_a_non_finite_or_zero_offset() {
+    let face = r(10.0, 10.0, 50.0, 40.0);
+    for o in [0.0, -6.0, f32::NAN] {
+        for band in axi::block_parts(face, o) {
+            assert!(band.is_degenerate(), "offset {o} must draw no block");
+        }
+    }
+}
+
+#[test]
 fn inward_body_leaves_exactly_the_offset_for_the_block() {
     // The window draw list is clipped to the window rect, so a block
     // drawn outside the window is cut off. The body shrinks instead,

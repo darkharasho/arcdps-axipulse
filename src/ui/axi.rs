@@ -104,6 +104,36 @@ pub fn block_path(r: Rect, offset: f32) -> Rect {
     r.shifted(offset, offset)
 }
 
+/// The VISIBLE part of the offset block: the region of
+/// `block_path(r, offset)` that falls outside `r`, as a right band and
+/// a bottom band that meet without overlapping.
+///
+/// The block is painted before the face, so under an opaque fill these
+/// two bands and the whole shifted rect are indistinguishable — the
+/// face covers the overlap either way. A translucent fill is a
+/// different matter. It composites with whatever is behind it, so a
+/// full-rect block leaves opaque ink behind most of the face and the
+/// game world behind the strip the shift does not reach, and the HUD's
+/// translucency shows up as a pale band inside the top and left
+/// outlines instead of across the whole surface. Painting only the
+/// bands puts one backdrop under the entire face.
+///
+/// The `max` guards matter only when the offset is wider or taller than
+/// the rect itself, where the block clears `r` completely: the right
+/// band then takes the whole shifted rect and the bottom band comes out
+/// degenerate, rather than the two together missing a corner.
+pub fn block_parts(r: Rect, offset: f32) -> [Rect; 2] {
+    // NaN loses to `max`, so a non-finite offset reads as no block.
+    let o = offset.max(0.0);
+    let [x0, y0] = r.min;
+    let [x1, y1] = r.max;
+    let split_x = x1.max(x0 + o);
+    [
+        Rect::new([split_x, y0 + o], [x1 + o, y1 + o]),
+        Rect::new([x0 + o, y1.max(y0 + o)], [split_x, y1 + o]),
+    ]
+}
+
 /// The body rect for a window whose block must be drawn INWARD: the
 /// window shrunk on its right and bottom by `offset`, so
 /// `block_path(body, offset)` lands flush with the window's own edge
@@ -210,10 +240,11 @@ fn blocked(ui: &Ui, r: Rect, fill: [f32; 4], border: f32, offset: f32) {
     if r.is_degenerate() { return; }
     let draw = ui.get_window_draw_list();
 
-    let block = block_path(r, offset);
-    if !block.is_degenerate() {
-        draw.add_rect(block.min, block.max, theme::INK_LINE)
-            .filled(true).build();
+    for band in block_parts(r, offset) {
+        if !band.is_degenerate() {
+            draw.add_rect(band.min, band.max, theme::INK_LINE)
+                .filled(true).build();
+        }
     }
     draw.add_rect(r.min, r.max, fill).filled(true).build();
 
@@ -287,6 +318,25 @@ pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
     let body = inward_body(window, theme::OFFSET_PANEL);
     blocked(ui, body, fill, theme::BORDER_PANEL, theme::OFFSET_PANEL);
     body
+}
+
+/// Reserve the inward block's depth at the foot of a window body.
+///
+/// `panel_inward` takes `OFFSET_PANEL` off the window's bottom so the
+/// block lands inside the draw list's clip rect, but imgui lays the
+/// content out against the window, which is that much taller. The
+/// bottom padding of the FACE therefore comes up short by the offset,
+/// and on an auto-resizing window a single centred line ends up sitting
+/// half the offset below the face's middle. Emitting the offset as
+/// trailing content grows the window instead, so the face's padding is
+/// symmetric again.
+///
+/// Call this as the LAST thing in the window body. A fixed-size dummy
+/// cannot feed back into the auto-resize the way moving the cursor up
+/// would.
+#[cfg(windows)]
+pub fn reserve_inward_block(ui: &Ui) {
+    ui.dummy([0.0, theme::OFFSET_PANEL]);
 }
 
 /// A quantity as length: an outlined track with a filled bar in it.

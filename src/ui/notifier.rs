@@ -198,6 +198,7 @@ pub fn render(ui: &Ui, config: &mut Config) {
             draw.add_text([bx, body_y], c, text);
             bx += ui.calc_text_size(text)[0];
         }
+        axi::reserve_inward_block(ui);
         let [px, py] = ui.window_pos();
         saved_pos = Some((px, py));
     });

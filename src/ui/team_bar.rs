@@ -121,6 +121,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
                 ui.dummy([indent, 1.0]);
             }
         }
+        axi::reserve_inward_block(ui);
         let [px, py] = ui.window_pos();
         saved_pos = Some((px, py));
     });
