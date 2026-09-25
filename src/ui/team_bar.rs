@@ -24,6 +24,16 @@ use crate::ui::theme;
 use crate::wvw_teams::{count_teams, team_color, TeamColor, TeamCounts};
 
 const BAR_WIDTH: f32 = 264.0;
+/// Window padding. `WIN_WIDTH` below carries the same x term, so the two
+/// MUST move together: the content region is the window minus twice this,
+/// and `draw_bar` / `draw_header` lay out against `BAR_WIDTH` assuming
+/// they are exactly equal.
+const PAD_X: f32 = 12.0 + theme::BORDER_PANEL;
+const PAD_Y: f32 = 9.0 + theme::BORDER_PANEL;
+/// Sized so the content region is exactly `BAR_WIDTH` by construction.
+/// `SetNextWindowSize` with `Condition::Always` overrides
+/// `ALWAYS_AUTO_RESIZE` on x, so imgui will not absorb a mismatch.
+const WIN_WIDTH: f32 = BAR_WIDTH + PAD_X * 2.0;
 const BAR_HEIGHT: f32 = 20.0;
 /// Gap between segments; the dark track shows through.
 const SEG_GAP: f32 = 2.0;
@@ -49,10 +59,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     // code paths.
     let form_tokens = theme::push_form(ui);
     let style_tokens = [
-        ui.push_style_var(StyleVar::WindowPadding([
-            12.0 + theme::BORDER_PANEL,
-            9.0 + theme::BORDER_PANEL,
-        ])),
+        ui.push_style_var(StyleVar::WindowPadding([PAD_X, PAD_Y])),
     ];
     let color_tokens = [
         ui.push_style_color(StyleColor::WindowBg, theme::TRANSPARENT),
@@ -61,7 +68,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     ];
 
     let mut win = ui.window("##axipulse-team-bar")
-        .size([BAR_WIDTH + 24.0, 0.0], Condition::Always)
+        .size([WIN_WIDTH, 0.0], Condition::Always)
         .flags(
             WindowFlags::NO_TITLE_BAR
                 | WindowFlags::NO_RESIZE
@@ -140,12 +147,8 @@ fn draw_header(ui: &Ui, map: &str, total: u32) {
     // Map name on the left, truncated with an ellipsis if it would
     // collide with the total.
     let avail = BAR_WIDTH - suffix_w - count_w - 10.0;
-    let mut title = map.to_string();
-    while !title.is_empty() && ui.calc_text_size(&title)[0] > avail {
-        title.pop();
-        while !title.is_char_boundary(title.len()) { title.pop(); }
-        title = format!("{}…", title.trim_end());
-    }
+    // Pure, and host-tested: the loop this replaces never terminated.
+    let title = axi::truncate_to_width(map, avail, |s| ui.calc_text_size(s)[0]);
 
     // One draw list, confined to this block: `get_window_draw_list`
     // takes a process-global single-instance lock and panics if a

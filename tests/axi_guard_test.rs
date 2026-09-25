@@ -121,12 +121,25 @@ fn is_colour_literal(body: &str) -> bool {
     parts.iter().filter(|p| p.parse::<f32>().is_ok()).count() >= 3
 }
 
+/// A continuation or closing line of a `/* ... */` block: `*/`, a bare
+/// `*`, or `* text`. Deliberately NOT any line merely starting with `*`
+/// — that swallowed pointer-deref assignments such as
+/// `*slot = [0.1, 0.2, 0.3, 1.0];`, which is real code the scanner must
+/// see. A deref is always `*` immediately followed by an identifier,
+/// `(`, `*` or `&`; a comment continuation always has whitespace, a `/`,
+/// or nothing after its `*`.
+fn is_block_comment_continuation(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(rest) = t.strip_prefix('*') else { return false };
+    rest.is_empty() || rest.starts_with('/') || rest.starts_with(char::is_whitespace)
+}
+
 /// Comment and string content confuse every rule here, so lines that
 /// are wholly a comment are skipped. A colour literal hiding inside a
 /// doc comment is not a colour the plugin draws.
 fn is_comment(line: &str) -> bool {
     let t = line.trim_start();
-    t.starts_with("//") || t.starts_with("*") || t.starts_with("/*")
+    t.starts_with("//") || t.starts_with("/*") || is_block_comment_continuation(line)
 }
 
 /// Blank out whole-line comments and lines carrying the opt-out marker,
@@ -145,45 +158,57 @@ fn strip_ignored_lines(text: &str) -> String {
         .join("\n")
 }
 
-/// Every top-level `[...]` body in the whole file, paired with the line
-/// on which its `[` opened. Tracking depth across the entire text
-/// (rather than resetting per line) is what catches a colour literal
-/// that rustfmt has wrapped across multiple lines, e.g.:
+/// EVERY `[...]` body in the whole file at every nesting depth, paired
+/// with the line on which its `[` opened. Tracking depth across the
+/// entire text (rather than resetting per line) is what catches a colour
+/// literal that rustfmt has wrapped across multiple lines, e.g.:
 ///
 /// ```ignore
 /// const CANARY: [f32; 4] = [
 ///     0.11, 0.22, 0.33, 1.0,
 /// ];
 /// ```
+///
+/// Nested bodies are emitted in their own right, not just the outermost
+/// one. A palette written as an array OF colours —
+/// `const PAL: [[f32; 4]; 2] = [[0.1, 0.2, 0.3, 1.0], [0.4, 0.5, 0.6, 1.0]];`
+/// — presents its outer body as eight comma-separated parts, which the
+/// colour rule (exactly four) rejects; each inner body is the four-part
+/// literal that must be flagged. One frame per open bracket is how both
+/// are seen.
+///
+/// An inner bracket's own `[` and `]` stay in the enclosing frame's text,
+/// so an outer body never looks like a flattened list of its children's
+/// components.
 fn bracket_bodies(text: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
-    let mut depth = 0usize;
-    let mut buf = String::new();
-    let mut open_line = 0usize;
+    // (line the `[` opened on, body so far), innermost last.
+    let mut stack: Vec<(usize, String)> = Vec::new();
     let mut line_no = 1usize;
     for ch in text.chars() {
+        if ch == '\n' {
+            line_no += 1;
+        }
         match ch {
-            '\n' => {
-                line_no += 1;
-                if depth >= 1 {
-                    buf.push('\n');
-                }
-            }
             '[' => {
-                depth += 1;
-                if depth == 1 {
-                    buf.clear();
-                    open_line = line_no;
+                for frame in stack.iter_mut() {
+                    frame.1.push('[');
                 }
+                stack.push((line_no, String::new()));
             }
             ']' => {
-                if depth == 1 {
-                    out.push((open_line, buf.clone()));
+                if let Some((open_line, buf)) = stack.pop() {
+                    out.push((open_line, buf));
                 }
-                depth = depth.saturating_sub(1);
+                for frame in stack.iter_mut() {
+                    frame.1.push(']');
+                }
             }
-            _ if depth >= 1 => buf.push(ch),
-            _ => {}
+            _ => {
+                for frame in stack.iter_mut() {
+                    frame.1.push(ch);
+                }
+            }
         }
     }
     out
@@ -389,6 +414,47 @@ fn scan_catches_multiline_colour_literal() {
         violations.iter().any(|(_, kind, _)| *kind == "colour"),
         "rustfmt wraps long array literals across lines; a colour split \
          across lines must still be caught: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_catches_nested_colour_literal_in_a_palette_array() {
+    // The outer body is eight components, so the "exactly four" rule
+    // rejects it; only a per-depth walk ever presents the two inner
+    // four-part literals to the colour rule. This was the fourth
+    // documented bypass and the likeliest shape a real regression takes:
+    // one array of inks rather than one ink.
+    let src = "const PAL: [[f32; 4]; 2] = [[0.1, 0.2, 0.3, 1.0], [0.4, 0.5, 0.6, 1.0]];\n";
+    let violations = scan(src);
+    let colours: Vec<_> = violations.iter().filter(|(_, k, _)| *k == "colour").collect();
+    assert_eq!(
+        colours.len(),
+        2,
+        "both inks of a nested palette literal must be flagged: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_scans_a_pointer_deref_assignment() {
+    // `is_comment` used to treat any line starting with `*` as a
+    // block-comment continuation, which swallowed real code. The two
+    // shapes must be told apart, not lumped together.
+    let src = "*slot = [0.1, 0.2, 0.3, 1.0];\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().any(|(_, kind, _)| *kind == "colour"),
+        "a deref assignment is code, not a comment continuation: {violations:?}"
+    );
+}
+
+#[test]
+fn scan_still_skips_block_comment_continuation_lines() {
+    let src = "/*\n * const C: [f32; 4] = [0.1, 0.2, 0.3, 1.0];\n */\n";
+    let violations = scan(src);
+    assert!(
+        violations.iter().all(|(_, kind, _)| *kind != "colour"),
+        "a colour inside a block comment is not a colour the plugin \
+         draws: {violations:?}"
     );
 }
 

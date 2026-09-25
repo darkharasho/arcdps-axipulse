@@ -244,3 +244,85 @@ fn a_non_finite_fraction_reads_as_empty() {
         assert!(fill.max[0].is_finite() && fill.max[1].is_finite());
     }
 }
+
+#[test]
+fn a_sub_pixel_fill_draws_nothing_at_all() {
+    // Pre-conversion guard: `if bar_w > 0.5`. Below half a pixel a fill
+    // is a stray mark rather than a quantity, and the track was left
+    // blank. Strictly greater than 0.5, as it was.
+    assert_eq!(axi::fill_frac(200.0, 0.0), 0.0);
+    assert_eq!(axi::fill_frac(200.0, 0.001), 0.0); // 0.2px
+    assert_eq!(axi::fill_frac(200.0, 0.0025), 0.0); // exactly 0.5px
+    assert_eq!(axi::fill_frac(200.0, 0.01), 0.01); // 2px
+    assert_eq!(axi::fill_frac(200.0, 1.0), 1.0);
+    // Still clamped and still finite-safe.
+    assert_eq!(axi::fill_frac(200.0, 4.0), 1.0);
+    assert_eq!(axi::fill_frac(200.0, -1.0), 0.0);
+    assert_eq!(axi::fill_frac(f32::NAN, 0.5), 0.0);
+    assert_eq!(axi::fill_frac(200.0, f32::NAN), 0.0);
+}
+
+// --- text truncation ----------------------------------------------------
+//
+// The loop these replace appended the ellipsis to the string it was
+// shortening, so after the first iteration it popped the ellipsis it had
+// just added and re-appended it: the string stopped changing and the
+// width condition never cleared. Inside GW2's render callback that is a
+// hang of the game, not a glitch. Every test here would spin forever
+// against that version.
+
+/// One pixel per `char`, so the expected results are countable by hand.
+fn one_px_per_char(s: &str) -> f32 {
+    s.chars().count() as f32
+}
+
+#[test]
+fn a_name_that_fits_is_returned_untouched() {
+    assert_eq!(axi::truncate_to_width("Eternal", 7.0, one_px_per_char), "Eternal");
+    assert_eq!(axi::truncate_to_width("Eternal", 99.0, one_px_per_char), "Eternal");
+    assert_eq!(axi::truncate_to_width("", 0.0, one_px_per_char), "");
+}
+
+#[test]
+fn a_name_one_glyph_too_long_loses_two_glyphs_to_the_ellipsis() {
+    // 8 chars into 7px: pop one (7 chars) and the ellipsis makes 8 —
+    // still too wide — pop again (6 chars) and the ellipsis makes 7.
+    assert_eq!(axi::truncate_to_width("Eternals", 7.0, one_px_per_char), "Eterna\u{2026}");
+}
+
+#[test]
+fn a_name_far_too_long_terminates_and_fits() {
+    let long = "Eternal Battlegrounds of the Mists and Beyond";
+    let out = axi::truncate_to_width(long, 10.0, one_px_per_char);
+    assert_eq!(out, "Eternal B\u{2026}");
+    assert!(one_px_per_char(&out) <= 10.0);
+    assert!(out.ends_with('\u{2026}'));
+}
+
+#[test]
+fn trailing_space_before_the_ellipsis_is_trimmed() {
+    // The cut lands mid-space; `trim_end` keeps "Eternal…" rather than
+    // "Eternal …", exactly as the pre-fix code intended.
+    assert_eq!(axi::truncate_to_width("Eternal Bg", 8.0, one_px_per_char), "Eternal\u{2026}");
+}
+
+#[test]
+fn a_multi_byte_name_is_never_cut_mid_character() {
+    // Every intermediate value must be valid UTF-8; `String::pop`
+    // removes a whole `char`, so a 2-byte or 4-byte glyph goes whole.
+    let name = "Rotmühle Ödland \u{1f409}\u{1f409}\u{1f409}";
+    for avail in 0..20 {
+        let out = axi::truncate_to_width(name, avail as f32, one_px_per_char);
+        // Round-tripping through str proves it is valid UTF-8; if a
+        // boundary were ever split the pop itself would have panicked.
+        assert_eq!(out, String::from_utf8(out.clone().into_bytes()).unwrap());
+        assert!(one_px_per_char(&out) <= avail as f32, "avail {avail}: {out:?}");
+    }
+    assert_eq!(axi::truncate_to_width(name, 6.0, one_px_per_char), "Rotmü\u{2026}");
+}
+
+#[test]
+fn nothing_is_drawn_when_not_even_the_ellipsis_fits() {
+    assert_eq!(axi::truncate_to_width("Eternal", 0.0, one_px_per_char), "");
+    assert_eq!(axi::truncate_to_width("Eternal", 0.5, one_px_per_char), "");
+}

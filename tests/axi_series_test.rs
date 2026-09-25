@@ -64,6 +64,10 @@ fn metric_inks_are_byte_identical_to_v0_4_4() {
     // their own values — unifying them would change what the plugin
     // draws, and this is a reskin.
     assert_eq!(series::METRIC_DAMAGE, [0.95, 0.38, 0.38, 1.0]);       // was ACCENT_DAMAGE / COLOR_DMG
+    assert_eq!(series::METRIC_DANGER, [0.95, 0.40, 0.40, 1.0]);       // was ACCENT_DANGER
+    // The two are near-identical and were NEVER equal; the deaths/downs
+    // cells draw DANGER, the damage cells DAMAGE.
+    assert_ne!(series::METRIC_DANGER, series::METRIC_DAMAGE);
     assert_eq!(series::METRIC_DOWN, [0.97, 0.55, 0.42, 1.0]);         // was ACCENT_DOWN / COLOR_TAKEN
     assert_eq!(series::METRIC_DAMAGE_TAKEN, series::METRIC_DOWN);
     assert_eq!(series::METRIC_SUPPORT, [0.40, 0.85, 0.65, 1.0]);      // was ACCENT_SUPPORT
@@ -87,7 +91,8 @@ fn every_domain_ink_is_fully_opaque() {
     let all = [
         series::TEAM_RED, series::TEAM_GREEN, series::TEAM_BLUE,
         series::TEAM_UNKNOWN, series::NO_TEAM, series::BOON_NEUTRAL,
-        series::METRIC_DAMAGE, series::METRIC_DOWN, series::METRIC_DAMAGE_TAKEN,
+        series::METRIC_DAMAGE, series::METRIC_DANGER, series::METRIC_DOWN,
+        series::METRIC_DAMAGE_TAKEN,
         series::METRIC_SUPPORT, series::METRIC_CLEANSE, series::METRIC_DEFEND,
         series::METRIC_SUCCESS, series::METRIC_NEUTRAL, series::METRIC_HEALTH,
         series::METRIC_DISTANCE, series::METRIC_OFF_BOONS, series::METRIC_DEF_BOONS,

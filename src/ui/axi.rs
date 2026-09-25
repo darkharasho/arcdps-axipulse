@@ -97,6 +97,17 @@ pub fn clamp_frac(frac: f32) -> f32 {
     if frac.is_finite() { frac.clamp(0.0, 1.0) } else { 0.0 }
 }
 
+/// A bar fraction with a sub-pixel fill suppressed. Pre-conversion every
+/// value bar guarded its fill with `if bar_w > 0.5`, so a fraction too
+/// small to cover half a pixel drew nothing at all; without it a sliver
+/// appears where there used to be blank track, which reads as a stray
+/// mark rather than as a quantity. `bar` applies this to every fill it
+/// draws.
+pub fn fill_frac(track_w: f32, frac: f32) -> f32 {
+    let f = clamp_frac(frac);
+    if track_w.is_finite() && track_w * f > 0.5 { f } else { 0.0 }
+}
+
 /// The filled length of a bar track — rule 7: a quantity is drawn as
 /// length, never intensity.
 pub fn bar_fill(track: Rect, frac: f32) -> Rect {
@@ -106,7 +117,47 @@ pub fn bar_fill(track: Rect, frac: f32) -> Rect {
     }
 }
 
+/// Fit `text` into `avail` pixels, appending a single ellipsis when it
+/// does not. `width_of` measures a string in the caller's font —
+/// `|s| ui.calc_text_size(s)[0]` in the overlay, a stub on the host,
+/// which is what makes this testable off Windows.
+///
+/// Each iteration shortens the BASE string and the ellipsis is appended
+/// to a candidate, never to the string being shortened. The previous
+/// form appended the ellipsis to `title` itself, so the next iteration
+/// popped the ellipsis it had just added and re-appended it: the string
+/// stopped changing and the condition never cleared — an infinite loop
+/// inside GW2's render callback, i.e. a hang of the game.
+///
+/// `String::pop` removes a whole `char`, so every intermediate value is
+/// valid UTF-8 and a multi-byte name can never be cut mid-character.
+///
+/// Returns an empty string if not even the ellipsis fits, rather than
+/// drawing a glyph past the space it was given.
+pub fn truncate_to_width(text: &str, avail: f32, width_of: impl Fn(&str) -> f32) -> String {
+    if width_of(text) <= avail {
+        return text.to_string();
+    }
+    let mut base = text.to_string();
+    while !base.is_empty() {
+        base.pop();
+        let candidate = format!("{}\u{2026}", base.trim_end());
+        if width_of(&candidate) <= avail {
+            return candidate;
+        }
+    }
+    String::new()
+}
+
 // --- draw helpers -------------------------------------------------------
+//
+// Every helper below acquires its own window draw list.
+// `ui.get_window_draw_list()` takes a process-global single-instance
+// lock that is released only when the list drops, and PANICS if a second
+// list is acquired while the first is live — a panic that crosses the
+// arcdps FFI boundary inside GW2's render callback. So none of these may
+// be called while the caller holds a draw list of its own: confine each
+// list to a bare block, or `drop` it, before calling one.
 
 #[cfg(windows)]
 use arcdps::imgui::Ui;
@@ -136,6 +187,7 @@ fn blocked(ui: &Ui, r: Rect, fill: [f32; 4], border: f32, offset: f32) {
 /// A panel: the heavier of the two form steps. `hovered` deepens the
 /// offset — pass `false` for anything the user cannot click, because a
 /// hover state on a non-interactive thing is a lie about affordance.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn panel(ui: &Ui, r: Rect, fill: [f32; 4], hovered: bool) {
     let offset = if hovered { theme::OFFSET_PANEL_HOVER } else { theme::OFFSET_PANEL };
@@ -143,6 +195,7 @@ pub fn panel(ui: &Ui, r: Rect, fill: [f32; 4], hovered: bool) {
 }
 
 /// A card or chip: the lighter of the two form steps.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn card(ui: &Ui, r: Rect, fill: [f32; 4], hovered: bool) {
     let offset = if hovered { theme::OFFSET_CONTROL_HOVER } else { theme::OFFSET_CONTROL };
@@ -160,6 +213,7 @@ pub fn card(ui: &Ui, r: Rect, fill: [f32; 4], hovered: bool) {
 /// SURFACE with dim text. Both lift on hover, because a chip is
 /// genuinely clickable — rule 4 forbids the lift only on things that
 /// are not.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn chip(
     ui: &Ui,
@@ -191,6 +245,7 @@ pub fn chip(
 /// A panel for a window whose block cannot go outside it. Takes the
 /// WINDOW rect and derives the body; returns the body so the caller
 /// knows how much room the content has.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
     let body = inward_body(window, theme::OFFSET_PANEL);
@@ -199,12 +254,13 @@ pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
 }
 
 /// A quantity as length: an outlined track with a filled bar in it.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn bar(ui: &Ui, track: Rect, frac: f32, ink: [f32; 4]) {
     if track.is_degenerate() { return; }
     let draw = ui.get_window_draw_list();
     draw.add_rect(track.min, track.max, theme::GROUND).filled(true).build();
-    let fill = bar_fill(track, frac);
+    let fill = bar_fill(track, fill_frac(track.w(), frac));
     if !fill.is_degenerate() {
         draw.add_rect(fill.min, fill.max, ink).filled(true).build();
     }
@@ -217,6 +273,7 @@ pub fn bar(ui: &Ui, track: Rect, frac: f32, ink: [f32; 4]) {
 
 /// The family motif, as two filled triangles meeting on the
 /// horizontal. `size` is the full diagonal.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn diamond(ui: &Ui, center: [f32; 2], size: f32, ink: [f32; 4]) {
     if !size.is_finite() || size <= 0.0 { return; }
@@ -239,6 +296,7 @@ pub fn label(ui: &Ui, text: &str) {
 
 /// An internal rule at hairline weight, for dividing content inside an
 /// already-outlined panel. Rule 5: outlined means annotation.
+/// Acquires its own draw list: never call this while one is live.
 #[cfg(windows)]
 pub fn rule(ui: &Ui, from: [f32; 2], to: [f32; 2]) {
     if !from.iter().chain(to.iter()).all(|v| v.is_finite()) { return; }

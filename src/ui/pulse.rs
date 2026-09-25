@@ -111,7 +111,7 @@ fn render_overview(ui: &Ui, fight: &FightData, idx: usize, derived: &Derived) {
         ("DOWN CONTRIBUTION", series::METRIC_DOWN,
             format_damage(dc),
             derived.rank_down_contribution.map(ordinal)),
-        ("DEATHS / DOWNS", if deaths_n == 0 { series::METRIC_SUCCESS } else { series::METRIC_DAMAGE },
+        ("DEATHS / DOWNS", if deaths_n == 0 { series::METRIC_SUCCESS } else { series::METRIC_DANGER },
             format!("{deaths_n} / {downs_n}"), None),
         ("STRIPS", series::METRIC_SUPPORT,
             st.to_string(),
@@ -406,7 +406,7 @@ fn render_defense(ui: &Ui, fight: &FightData, idx: usize) {
     );
     ui.dummy([0.0, 2.0]);
 
-    let alive_color = if deaths_n == 0 { series::METRIC_SUCCESS } else { series::METRIC_DAMAGE };
+    let alive_color = if deaths_n == 0 { series::METRIC_SUCCESS } else { series::METRIC_DANGER };
     let cells = [
         ("DEATHS / DOWNS",  alive_color,            format!("{deaths_n} / {downs_n}"), None),
         ("DODGES",          series::METRIC_NEUTRAL, dodges_n.to_string(),              None),

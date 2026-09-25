@@ -83,14 +83,25 @@ tune the two steps independently.
 
 ## Known bugs (real, shipped)
 
-- **`src/ui/pulse.rs:707`** — the composition pill row does not wrap;
-  pills past the window's right edge are drawn outside it and clipped.
-  **To close:** wrap the row or clip/measure before drawing past the
-  edge.
-- **Two per-frame `format!` allocations** — one in `pulse.rs`, one in
-  the notifier's team-count path — inside a render callback shared with
-  the game's render thread. **To close:** cache or avoid the allocation
-  on the hot path.
+- **`src/ui/pulse.rs:747-749`** — the composition pill row does not
+  wrap. It is not clipped: when a pill would pass the right edge the
+  code resets `px` to the row's left edge but never advances `py`, so
+  every overflow pill is drawn ON TOP of the pills in row 1, and the
+  invisible buttons laid over them collide — the hit target of an
+  overdrawn pill is whichever button was registered last. Pre-existing;
+  the conversion changed the pill's paint, not this layout. **To
+  close:** advance `py` by `pill_h` plus a gap when the row wraps (and
+  grow the `dummy` that reserves the row's height to match).
+- **Per-frame `format!` allocations**, inside a render callback shared
+  with the game's render thread. The count is not two: `axi::chip`
+  allocates two `String`s per chip — its own `format!("##{id}")` plus the
+  caller's `format!("<prefix>-{label}")` — at each of its 4 call sites
+  (`main.rs:394`, `pulse.rs:65`, `pulse.rs:286`, `timeline.rs:175`),
+  which comes to **16 `String`s per frame in Pulse and 22 in
+  Timeline** — plus the pre-existing ones in
+  `pulse.rs` and the notifier's team-count path. **To close:** cache the chip
+  ids (they are static per tab), or key the invisible button on a
+  `push_id` instead of a formatted label.
 - **`src/ui/notifier.rs`'s heartbeat halo draws at 0.18 alpha over the
   ground**, a genuine rule-2 breach (no colour at partial opacity over
   the ground). Pre-existing: it was 0.18 before the conversion too.
@@ -104,10 +115,18 @@ tune the two steps independently.
 ## Cosmetic, needs a look at GW2 UI scale
 
 - The boon-name plate in `timeline.rs` reads as eight small dark
-  rectangles across a boon row at small UI scale. `PLATE_PAD_X` /
-  `PLATE_PAD_Y` are the knob; the plate exists because full-strength
-  segments left the name at ~1.6:1 (Ruling 8). **To close:** retune the
-  pad constants at in-game scale.
+  rectangles across a boon row at small UI scale. The plate exists
+  because full-strength segments left the name at ~1.6:1 (Ruling 8).
+  `PLATE_PAD_X` is the knob on X. **`PLATE_PAD_Y` is dead on Y at any
+  normal UI scale**: `timeline.rs:530-539` clamps the plate to the row
+  band (`.max(row_y)` / `.min(row_y + BOON_ROW_H)`), and with
+  `BOON_ROW_H` at 12.0 against a text line of 13px or more, `nudge_y` is
+  0 and both clamps bind, so the plate is exactly the row band whatever
+  `PLATE_PAD_Y` says. The only constant that changes the plate's height
+  is `BOON_ROW_H` — which also resizes the uptime segments, so there is
+  no Y-only knob. **To close:** retune `PLATE_PAD_X` at in-game scale,
+  and either drop `PLATE_PAD_Y` or lift the Y clamp if the plate needs
+  to breathe past its row.
 - The area-lane polyline in `timeline.rs` is near-invisible. **To
   close:** raise its stroke weight or ink strength.
 - A 1px nick where a profession icon overdraws a control outline in
@@ -150,6 +169,14 @@ tune the two steps independently.
   surface's block is one frame stale on the frame its content resizes.
   **To close:** none known that doesn't cost a frame of layout lag
   elsewhere.
+- `tests/axi_guard_test.rs`'s `rounding_args` scans **one line at a
+  time**, so it fails **OPEN** on a `rounding(` call whose argument list
+  is wrapped across lines — no closing `)` on the line means no argument
+  is extracted and no violation is reported. The colour rule does not
+  share this hole (`bracket_bodies` tracks depth across the whole file);
+  this one is specific to rounding. **To close:** brace-match
+  `rounding(` across lines the way `bracket_bodies` does, or keep
+  `rounding(...)` calls on one line by convention.
 - The `main.rs` panel-rect comment cited imgui.cpp "8003-8006" for the
   `DC.CursorPos = DC.CursorStartPos` step; the correct line is 8007.
   Fixed in this task, since that comment is load-bearing (the third

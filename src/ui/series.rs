@@ -39,6 +39,11 @@ pub const NO_TEAM: [f32; 4] = [0.29, 0.86, 0.50, 1.0];
 /// stay two constants at their pre-conversion values: unifying them
 /// would change what the plugin draws, and this is a reskin.
 pub const METRIC_DAMAGE: [f32; 4]      = [0.95, 0.38, 0.38, 1.0];
+/// The deaths/downs ink. Deliberately distinct from `METRIC_DAMAGE`:
+/// pre-conversion this was `pulse.rs`'s own `ACCENT_DANGER` and the two
+/// were never the same value. Keeping it apart is what makes the reskin
+/// a reskin — do NOT fold it into `METRIC_DAMAGE`.
+pub const METRIC_DANGER: [f32; 4]      = [0.95, 0.40, 0.40, 1.0];
 pub const METRIC_DOWN: [f32; 4]        = [0.97, 0.55, 0.42, 1.0];
 /// Damage taken shares the down-contribution ink; they were already
 /// the same value in Pulse and Timeline respectively.

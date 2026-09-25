@@ -110,6 +110,11 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         // Deco1 is the title-bar height and Deco2 the scrollbar sizes,
         // both already inside the two accessors, so the scrollbar-present
         // and scrollbar-absent cases need no special casing.
+        //
+        // Assumes it is NOT inside a table or a columns set: there
+        // `GetContentRegionAvail` answers from `WorkRect.Max` instead of
+        // `ContentRegionRect.Max`, and the substitution above stops
+        // holding. Keep this as the closure's first statement.
         let content_min = ui.cursor_screen_pos();
         let avail = ui.content_region_avail();
         let scroll = [ui.scroll_x(), ui.scroll_y()];

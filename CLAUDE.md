@@ -38,6 +38,16 @@ DLL that GW2 has mmap'd as executable.
   a window, whose draw list is clipped to itself so its block must go
   inward. imgui centres `add_rect` stroke on the path, so outlines inset
   by `thickness / 2` — `axi::outline_path` does this and is host-tested.
+- **One draw list at a time.** `ui.get_window_draw_list()` takes a
+  process-global single-instance lock that is released only when the
+  list drops, and it **panics** if a second list is acquired while the
+  first is live — inside GW2's render callback, so the panic crosses the
+  arcdps FFI boundary and takes the game with it. Confine each list to a
+  bare block (or `drop` it) before doing anything else, and remember
+  that every `axi::` helper takes one of its own: `axi::panel`, `card`,
+  `chip`, `panel_inward`, `bar`, `diamond` and `rule` must never be
+  called while you hold a list. This is the one invariant that actually
+  broke during the conversion, and the type checker cannot see it.
 - **Geometry comes from one knob.** `theme::SCALE` multiplies every
   border and offset. If the form reads too heavy at your GW2 UI scale,
   change `SCALE` and nothing else; never tune the two steps
