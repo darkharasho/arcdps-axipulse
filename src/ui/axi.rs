@@ -244,7 +244,7 @@ pub fn truncate_to_width(text: &str, avail: f32, width_of: impl Fn(&str) -> f32)
 // list to a bare block, or `drop` it, before calling one.
 
 #[cfg(windows)]
-use arcdps::imgui::{DrawListMut, Ui};
+use arcdps::imgui::{DrawListMut, StyleColor, Ui};
 
 /// Lay `ink` down as an outline flush inside `r`. Takes the CALLER's
 /// draw list rather than acquiring one, so a caller already holding a
@@ -341,6 +341,78 @@ pub fn chip(
         .add_text([origin[0] + pad[0], origin[1] + pad[1]], ink, label);
 
     (clicked, w)
+}
+
+/// A dropdown drawn in the axi form: a blocked control that lifts on
+/// hover, and a popup that is a blocked panel rather than a bare fill.
+///
+/// Returns true when the selection changed, and writes the new index to
+/// `current`, so it drops in where `combo_simple_string` was.
+///
+/// imgui's own combo is a flat `FrameBg` rectangle and its popup a flat
+/// `PopupBg` one — no outline, no block, which is rule 3's exception
+/// and there is no exception. Both fills are pushed to TRANSPARENT here
+/// and painted underneath by hand, so imgui keeps the parts it is good
+/// at (the preview string, the caret, hit-testing, keyboard) and the
+/// chrome comes from the same helpers every other raised thing uses.
+///
+/// The hover is read from the mouse rather than from `is_item_hovered`
+/// because the chrome is drawn BEFORE the widget that would report it,
+/// and a lift that arrives a frame late reads as lag on a control the
+/// cursor is resting on.
+#[cfg(windows)]
+pub fn combo(ui: &Ui, id: &str, items: &[&str], current: &mut usize, accent: [f32; 4]) -> bool {
+    if items.is_empty() { return false; }
+    let idx = (*current).min(items.len() - 1);
+
+    let control = Rect::at(ui.cursor_screen_pos(), [ui.calc_item_width(), ui.frame_height()]);
+    card(ui, control, theme::SURFACE, ui.is_mouse_hovering_rect(control.min, control.max));
+
+    let hidden = [
+        ui.push_style_color(StyleColor::FrameBg, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::FrameBgHovered, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::FrameBgActive, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::Button, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::ButtonHovered, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::ButtonActive, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::PopupBg, theme::TRANSPARENT),
+        // Rule 5: the filled row is the one that is selected. Hover is
+        // an annotation on top of that, so it takes the raised surface
+        // rather than a second accent the eye has to rank.
+        ui.push_style_color(StyleColor::Header, accent),
+        ui.push_style_color(StyleColor::HeaderActive, accent),
+        ui.push_style_color(StyleColor::HeaderHovered, theme::SURFACE_RAISED),
+    ];
+
+    let mut changed = false;
+    if let Some(popup) = ui.begin_combo(id, items[idx]) {
+        // The popup is its own imgui window with its own draw list, so
+        // this is the same inward panel the top-level windows draw, for
+        // the same reason: a block outside the window is clipped away.
+        panel_inward(ui, Rect::at(ui.window_pos(), ui.window_size()), theme::SURFACE);
+
+        for (i, item) in items.iter().enumerate() {
+            let selected = i == idx;
+            // Near-black on the accent, for the same reason a bar label
+            // over its fill is: the accent is a full-strength ink and
+            // TEXT does not survive on it.
+            let ink = ui.push_style_color(
+                StyleColor::Text,
+                if selected { theme::ACCENT_INK } else { theme::TEXT },
+            );
+            if ui.selectable_config(item).selected(selected).build() {
+                *current = i;
+                changed = true;
+            }
+            ink.end();
+        }
+
+        reserve_inward_block(ui);
+        popup.end();
+    }
+
+    for tok in hidden { tok.end(); }
+    changed
 }
 
 /// A panel for a window whose block cannot go outside it. Takes the

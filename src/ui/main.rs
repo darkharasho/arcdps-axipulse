@@ -213,7 +213,7 @@ fn render_header(ui: &Ui, state: &AppState, accent: [f32; 4]) {
     let combo_y = cursor[1] + (row_h - ui.frame_height_with_spacing()).max(0.0) * 0.5;
     ui.set_cursor_screen_pos([combo_x, combo_y]);
     ui.set_next_item_width(combo_w);
-    render_fight_picker_combo(ui, state);
+    render_fight_picker_combo(ui, state, accent);
 
     // Park the cursor at the bottom of the row for downstream layout.
     ui.set_cursor_screen_pos([cursor[0], cursor[1] + row_h]);
@@ -327,7 +327,7 @@ fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32, accent: [f32; 4
 /// newest-history-first. Selecting an entry pins the view to that
 /// fight. Caller positions and sizes the combo via `set_cursor_screen_pos`
 /// + `set_next_item_width` before calling.
-fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
+fn render_fight_picker_combo(ui: &Ui, state: &AppState, accent: [f32; 4]) {
     let mut sel = FIGHT_SEL.lock().ok().map(|g| *g).unwrap_or(FightSel::Latest);
     let history_len = state.history_len();
 
@@ -365,7 +365,7 @@ fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
     };
 
     let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-    if ui.combo_simple_string("##fight-picker", &mut current_idx, &label_refs) {
+    if axi::combo(ui, "##fight-picker", &label_refs, &mut current_idx, accent) {
         sel = if current_idx == 0 {
             FightSel::Latest
         } else {
