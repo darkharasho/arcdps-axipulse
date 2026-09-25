@@ -3,8 +3,14 @@
 //! `map` compiles on the host too: its pure playback math (lerp,
 //! status/health sampling) is host-tested, so only its render items
 //! carry per-item `#[cfg(windows)]` gates.
+//!
+//! `theme`, `series` and `axi` follow the same pattern for the same
+//! reason: the axi-design token values, the accent lookup and the
+//! block/outline geometry are host-tested, so only the functions that
+//! touch `Ui` carry gates.
 
 pub mod map;
+pub mod theme;
 
 #[cfg(windows)]
 pub mod icons;
