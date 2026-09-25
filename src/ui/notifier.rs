@@ -1,12 +1,17 @@
 #![cfg(windows)]
-//! Transparent notifier toast. Shows "Parsing…" while a log is being
-//! parsed and "Parsed: <fight>" briefly after one lands. Independent
-//! of the main AxiPulse window so users can keep that hidden.
+//! Notifier toast: a HUD surface, so it fills at `theme::ALPHA_HUD`
+//! (times its own fade) while its ink draws unscaled.
+//!
+//! Shows "Parsing…" while a log is being parsed and "Parsed: <fight>"
+//! briefly after one lands. Independent of the main AxiPulse window so
+//! users can keep that hidden.
 
 use arcdps::imgui::{Condition, StyleColor, StyleVar, Ui, WindowFlags};
 
 use crate::config::Config;
 use crate::plugin::ParsedToast;
+use crate::ui::axi::{self, Rect};
+use crate::ui::theme;
 
 /// How long the "Parsed: …" toast lingers after a parse completes.
 const PARSED_LINGER_SECS: f32 = 6.0;
@@ -36,54 +41,64 @@ pub fn render(ui: &Ui, config: &mut Config) {
     });
     let Some(msg) = msg else { return };
 
+    // imgui paints WindowBg itself, so we take the fill away from it and
+    // paint block, fill and outline ourselves, INWARD from the window
+    // edge. That is what makes this surface's opacity one constant.
+    let form_tokens = theme::push_form(ui);
     let style_tokens = [
-        ui.push_style_var(StyleVar::WindowPadding([10.0, 8.0])),
-        ui.push_style_var(StyleVar::WindowRounding(8.0)),
-        ui.push_style_var(StyleVar::WindowBorderSize(0.0)),
+        ui.push_style_var(StyleVar::WindowPadding([
+            10.0 + theme::BORDER_PANEL,
+            8.0 + theme::BORDER_PANEL,
+        ])),
     ];
-    // Translucent dark panel; alpha pulses for "Parsing" and fades out
-    // for the tail of "Parsed".
     // `body` is rendered as a series of (text, colour) segments laid
     // out left-to-right so the ally/enemy counts can be coloured.
-    let (bg_alpha, accent, label, body): (f32, [f32; 4], &str, Vec<(String, [f32; 4])>) = match msg {
+    //
+    // The match yields a `fade_scale` in [0, 1] rather than an absolute
+    // background alpha: the surface fills at `ALPHA_HUD * fade_scale`,
+    // so every pre-conversion timing is preserved while the HUD's
+    // opacity stays a single constant.
+    let accent = theme::accent(&config.accent);
+    let (fade_scale, label_ink, label, body): (f32, [f32; 4], &str, Vec<(String, [f32; 4])>) = match msg {
         Msg::Parsing(name) => {
+            // Same 3 rad/s pulse as before, expressed as a fraction of
+            // the HUD alpha rather than as an absolute alpha.
             let t = ui.time() as f32;
             let pulse = 0.5 + 0.5 * ((t * 3.0).sin());
-            let alpha = 0.55 + 0.15 * pulse;
-            (alpha, [0.31, 0.86, 0.61, 1.0], "Parsing...",
-             vec![(name.to_string(), [0.97, 0.97, 1.0, 1.0])])
+            let scale = (0.55 + 0.15 * pulse) / theme::ALPHA_HUD;
+            (scale.min(1.0), accent, "Parsing...", vec![(name.to_string(), theme::TEXT)])
         }
         Msg::Parsed(toast, age) => {
-            // Linear fade across the final 1.5s of the linger window.
-            let fade_in = 1.0_f32;
+            // Linear fade across the final 1.5s of the linger window,
+            // unchanged.
             let remain = (PARSED_LINGER_SECS - age).max(0.0);
-            let alpha = (remain / 1.5).min(fade_in) * 0.75;
-            let neutral = [0.97, 0.97, 1.0, 1.0];
+            let scale = (remain / 1.5).min(1.0) * (0.75 / theme::ALPHA_HUD);
             let mut segs: Vec<(String, [f32; 4])> = Vec::new();
             // Per-team counts in the team bar's palette and order, so
             // the toast never disagrees with the widget.
             let teams = toast.counts.segments();
             if !toast.map.is_empty() {
                 let sep = if teams.is_empty() { "" } else { " \u{00b7} " };
-                segs.push((format!("{}{}", toast.map, sep), neutral));
+                segs.push((format!("{}{}", toast.map, sep), theme::TEXT));
             }
             for (i, (color, count)) in teams.iter().enumerate() {
-                if i > 0 {
-                    segs.push((" v ".to_string(), neutral));
-                }
+                if i > 0 { segs.push((" v ".to_string(), theme::TEXT)); }
                 segs.push((count.to_string(), color.rgba()));
             }
-            (alpha, [0.50, 0.78, 1.0, 1.0], "Parsed", segs)
+            // A completed parse is a status, not chrome — rule 5.
+            (scale.min(1.0), theme::OK, "Parsed", segs)
         }
         Msg::Placeholder => (
-            0.70,
-            [0.31, 0.86, 0.61, 1.0],
+            0.70 / theme::ALPHA_HUD,
+            accent,
             "AxiPulse Notifier",
-            vec![("Drag to reposition. Hidden until a parse fires.".to_string(),
-                  [0.97, 0.97, 1.0, 1.0])],
+            vec![(
+                "Drag to reposition. Hidden until a parse fires.".to_string(),
+                theme::TEXT,
+            )],
         ),
     };
-    let bg = ui.push_style_color(StyleColor::WindowBg, [0.06, 0.07, 0.09, bg_alpha]);
+    let bg = ui.push_style_color(StyleColor::WindowBg, theme::TRANSPARENT);
 
     let mut win = ui.window("##axipulse-notifier")
         .size([340.0, 0.0], Condition::Always)
@@ -104,6 +119,15 @@ pub fn render(ui: &Ui, config: &mut Config) {
     }
     let mut saved_pos: Option<(f32, f32)> = None;
     win.build(|| {
+        // HUD surface. The toast's own fade multiplies ALPHA_HUD, so a
+        // finishing toast dissolves without ever dimming its ink.
+        let win_rect = Rect::at(ui.window_pos(), ui.window_size());
+        axi::panel_inward(
+            ui,
+            win_rect,
+            theme::with_alpha(theme::SURFACE, theme::ALPHA_HUD * fade_scale),
+        );
+
         // AxiPulse heartbeat icon, sized to the two-line header. Pulses
         // size/alpha while parsing; static while showing the parsed
         // toast (alpha follows the bg fade).
@@ -127,14 +151,18 @@ pub fn render(ui: &Ui, config: &mut Config) {
             let cx = cursor[0] + icon_box * 0.5;
             let cy = cursor[1] + icon_box * 0.5;
             let half = icon_size * 0.5;
-            // Soft halo so the heartbeat reads on transparent bgs.
+            // Square halo so the heartbeat reads on a busy backdrop;
+            // the language has no soft round glow.
             let halo_r = icon_size * 0.65;
-            let mut halo = accent; halo[3] = 0.18;
+            let halo = theme::with_alpha(label_ink, 0.18);
             draw.add_rect(
                 [cx - halo_r, cy - halo_r],
                 [cx + halo_r, cy + halo_r],
                 halo,
-            ).filled(true).rounding(halo_r).build();
+            ).filled(true).build();
+            // No tint on the texture itself — the vendored imgui
+            // binding's image-tint path appears to crash the host under
+            // Wine when exercised.
             draw.add_image(
                 handle.tex,
                 [cx - half, cy - half],
@@ -146,16 +174,15 @@ pub fn render(ui: &Ui, config: &mut Config) {
         ui.dummy([icon_box + 4.0, icon_box]);
         ui.same_line();
         let after_icon = ui.cursor_screen_pos();
-        draw.add_text([after_icon[0], cursor[1]], accent, label);
+        draw.add_text([after_icon[0], cursor[1]], label_ink, label);
         // Lay out body segments left-to-right at the second-line y.
         let body_y = cursor[1] + line_h;
         let mut bx = after_icon[0];
-        // Honour the window's overall fade by scaling segment alpha by
-        // bg_alpha so colours stay readable during the fade-out.
-        let fade = (bg_alpha / 0.75).clamp(0.0, 1.0);
+        // Ink is not scaled by the surface's HUD alpha, only by the
+        // toast's own fade — otherwise a fully-visible toast would
+        // draw dim text.
         for (text, color) in &body {
-            let mut c = *color;
-            c[3] *= fade;
+            let c = theme::with_alpha(*color, color[3] * fade_scale);
             draw.add_text([bx, body_y], c, text);
             bx += ui.calc_text_size(text)[0];
         }
@@ -172,4 +199,5 @@ pub fn render(ui: &Ui, config: &mut Config) {
 
     bg.end();
     for tok in style_tokens { tok.end(); }
+    for tok in form_tokens { tok.pop(); }
 }

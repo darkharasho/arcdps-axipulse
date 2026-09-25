@@ -42,10 +42,7 @@ const DEFERRED: [&str; 5] = [
 /// entry; the list reaching empty is the conversion being done. Unlike
 /// DEFERRED this is temporary scaffolding — if you are reading this
 /// after the branch merged and it is non-empty, something was skipped.
-const PENDING: [&str; 2] = [
-    "src/ui/team_bar.rs",
-    "src/ui/notifier.rs",
-];
+const PENDING: [&str; 0] = [];
 
 /// Roots walked for guardable `.rs` files. Walking rather than listing
 /// means a NEW ui file is guarded by default, which is the only way an

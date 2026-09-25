@@ -2,39 +2,34 @@
 //! Persistent team-count bar: a small frameless window with one
 //! stacked bar showing red/green/blue player counts from the latest
 //! parsed fight. Independent of the main AxiPulse window, like the
-//! notifier toast. Colors follow axibridge's WvW team palette.
+//! notifier toast. Colors follow axibridge's WvW team palette
+//! (`ui::series`), which the accent never recolours — rule 10.
+//!
+//! A HUD surface: small, always-on, and sitting over gameplay rather
+//! than being opened and read, so it fills at `theme::ALPHA_HUD` while
+//! the three reading surfaces went opaque. Its ink is NOT scaled.
 //!
 //! Two renderings behind `config.team_bar_compact`:
-//!   full    — map-name header + total, glossy pill bar in a recessed
-//!             track, color glow strip, legend with a "you" marker on
-//!             the viewer's own team
-//!   compact — just the glossy pill bar
+//!   full    — map-name header + total, segmented bar in a GROUND
+//!             track, legend with a "you" marker on the viewer's own
+//!             team
+//!   compact — just the bar
 
 use arcdps::imgui::{Condition, StyleColor, StyleVar, Ui, WindowFlags};
 
 use crate::config::Config;
 use crate::state::AppState;
+use crate::ui::axi::{self, Rect};
+use crate::ui::theme;
 use crate::wvw_teams::{count_teams, team_color, TeamColor, TeamCounts};
 
 const BAR_WIDTH: f32 = 264.0;
 const BAR_HEIGHT: f32 = 20.0;
 /// Gap between segments; the dark track shows through.
 const SEG_GAP: f32 = 2.0;
-/// Corner rounding on the bar's outer ends. Softer than a full pill:
-/// full-pill rounding turns near-empty segments into misshapen nubs.
-const BAR_ROUNDING: f32 = 7.0;
 /// Floor on segment width so a 1-player team stays a legible pip
 /// instead of a 2px sliver.
 const MIN_SEG_WIDTH: f32 = 14.0;
-const GLOW_HEIGHT: f32 = 3.0;
-const GLOW_GAP: f32 = 3.0;
-
-const TRACK_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.45];
-const BAR_OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
-const SEG_TEXT: [f32; 4] = [0.03, 0.04, 0.06, 0.85];
-const HEADER_DIM: [f32; 4] = [1.0, 1.0, 1.0, 0.40];
-const HEADER_MID: [f32; 4] = [1.0, 1.0, 1.0, 0.55];
-const HEADER_BRIGHT: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
 
 pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     if !config.show_team_bar { return; }
@@ -47,14 +42,22 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         Some(team_color(&f.data.players.get(idx)?.team))
     });
 
+    // imgui paints WindowBg itself and clips the window draw list to the
+    // window rect, so we take the fill away from imgui and paint block,
+    // fill and outline ourselves, INWARD from the window edge. That is
+    // what makes this surface's opacity one constant rather than two
+    // code paths.
+    let form_tokens = theme::push_form(ui);
     let style_tokens = [
-        ui.push_style_var(StyleVar::WindowPadding([12.0, 9.0])),
-        ui.push_style_var(StyleVar::WindowRounding(10.0)),
-        ui.push_style_var(StyleVar::WindowBorderSize(1.0)),
+        ui.push_style_var(StyleVar::WindowPadding([
+            12.0 + theme::BORDER_PANEL,
+            9.0 + theme::BORDER_PANEL,
+        ])),
     ];
     let color_tokens = [
-        ui.push_style_color(StyleColor::WindowBg, [0.07, 0.08, 0.11, 0.82]),
-        ui.push_style_color(StyleColor::Border, [1.0, 1.0, 1.0, 0.07]),
+        ui.push_style_color(StyleColor::WindowBg, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::Text, theme::TEXT),
+        ui.push_style_color(StyleColor::TextDisabled, theme::TEXT_FAINT),
     ];
 
     let mut win = ui.window("##axipulse-team-bar")
@@ -77,6 +80,12 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     let compact = config.team_bar_compact;
     let mut saved_pos: Option<(f32, f32)> = None;
     win.build(|| {
+        // HUD surface: translucent fill, fully opaque ink. A see-through
+        // offset block with the battlefield moving inside it reads as a
+        // rendering fault, not as a hard block.
+        let win_rect = Rect::at(ui.window_pos(), ui.window_size());
+        axi::panel_inward(ui, win_rect, theme::with_alpha(theme::SURFACE, theme::ALPHA_HUD));
+
         match counts {
             Some(c) if c.total() > 0 => {
                 if !compact {
@@ -85,7 +94,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
                     let map = fight.map(|f| f.data.map_name.to_uppercase()).unwrap_or_default();
                     draw_header(ui, &map, c.total());
                 }
-                draw_bar(ui, c, compact);
+                draw_bar(ui, c);
                 if !compact {
                     draw_legend(ui, c, self_color);
                 }
@@ -114,11 +123,11 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
 
     for tok in color_tokens { tok.end(); }
     for tok in style_tokens { tok.end(); }
+    for tok in form_tokens { tok.pop(); }
 }
 
 fn draw_header(ui: &Ui, map: &str, total: u32) {
     let origin = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
     let line_h = ui.text_line_height();
 
     // Right-aligned "<n> players", bright count + dim suffix.
@@ -127,8 +136,6 @@ fn draw_header(ui: &Ui, map: &str, total: u32) {
     let count_w = ui.calc_text_size(&count_txt)[0];
     let suffix_w = ui.calc_text_size(suffix)[0];
     let right = origin[0] + BAR_WIDTH;
-    draw.add_text([right - suffix_w, origin[1]], HEADER_MID, suffix);
-    draw.add_text([right - suffix_w - count_w, origin[1]], HEADER_BRIGHT, &count_txt);
 
     // Map name on the left, truncated with an ellipsis if it would
     // collide with the total.
@@ -139,37 +146,27 @@ fn draw_header(ui: &Ui, map: &str, total: u32) {
         while !title.is_char_boundary(title.len()) { title.pop(); }
         title = format!("{}…", title.trim_end());
     }
-    draw.add_text(origin, HEADER_DIM, &title);
+
+    // One draw list, confined to this block: `get_window_draw_list`
+    // takes a process-global single-instance lock and panics if a
+    // second list is acquired while this one is alive.
+    {
+        let draw = ui.get_window_draw_list();
+        draw.add_text([right - suffix_w, origin[1]], theme::TEXT_DIM, suffix);
+        draw.add_text([right - suffix_w - count_w, origin[1]], theme::TEXT, &count_txt);
+        draw.add_text(origin, theme::TEXT_FAINT, &title);
+    }
 
     ui.dummy([BAR_WIDTH, line_h + 4.0]);
 }
 
-/// Blend `c` toward white by `f`.
-fn lighten(c: [f32; 4], f: f32) -> [f32; 4] {
-    [c[0] + (1.0 - c[0]) * f, c[1] + (1.0 - c[1]) * f, c[2] + (1.0 - c[2]) * f, c[3]]
-}
-
-/// Blend `c` toward black by `f`.
-fn darken(c: [f32; 4], f: f32) -> [f32; 4] {
-    [c[0] * (1.0 - f), c[1] * (1.0 - f), c[2] * (1.0 - f), c[3]]
-}
-
-fn draw_bar(ui: &Ui, counts: TeamCounts, compact: bool) {
+fn draw_bar(ui: &Ui, counts: TeamCounts) {
     let total = counts.total() as f32;
     let segments = counts.segments();
     let gaps = SEG_GAP * (segments.len().saturating_sub(1)) as f32;
     let usable = BAR_WIDTH - gaps;
 
     let origin = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
-    let y0 = origin[1];
-    let y1 = y0 + BAR_HEIGHT;
-
-    // Recessed track behind the segments; shows through the gaps.
-    draw.add_rect([origin[0], y0], [origin[0] + BAR_WIDTH, y1], TRACK_BG)
-        .filled(true)
-        .rounding(BAR_ROUNDING)
-        .build();
 
     // Proportional widths with a per-segment floor wide enough for the
     // count label, so every segment always shows its count. The deficit
@@ -196,84 +193,49 @@ fn draw_bar(ui: &Ui, counts: TeamCounts, compact: bool) {
         })
         .collect();
 
-    let mut x = origin[0];
-    let last = segments.len() - 1;
-    let mut glow_spans: Vec<(f32, f32, TeamColor)> = Vec::with_capacity(segments.len());
-    for (i, (color, _count)) in segments.iter().copied().enumerate() {
-        let w = widths[i];
-        let (x0, x1) = (x, x + w);
-        let (first, is_last) = (i == 0, i == last);
-        // Middle segments must use zero rounding rather than clearing
-        // all four corner flags: imgui promotes an empty corner mask
-        // back to RoundCornersAll, which would round their edges.
-        let rounding = if first || is_last { BAR_ROUNDING.min(w * 0.5) } else { 0.0 };
+    // Label metrics up front so nothing inside the draw-list block
+    // needs a second list.
+    let label_sizes: Vec<[f32; 2]> = labels.iter().map(|l| ui.calc_text_size(l)).collect();
 
-        // Base fill, then a full-height gradient overlay: light at the
-        // top fading through the base color to a shaded bottom. The
-        // overlay is a plain quad, so inset it past the rounded corners
-        // and let the base fill own the corner arcs.
-        let base = color.rgba();
-        draw.add_rect([x0, y0], [x1, y1], base)
-            .filled(true)
-            .rounding(rounding)
-            .round_top_left(first)
-            .round_bot_left(first)
-            .round_top_right(is_last)
-            .round_bot_right(is_last)
-            .build();
-        let gx0 = if first { x0 + rounding } else { x0 };
-        let gx1 = if is_last { x1 - rounding } else { x1 };
-        if gx1 > gx0 {
-            let mid = y0 + BAR_HEIGHT * 0.55;
-            let top = lighten(base, 0.22);
-            let bot = darken(base, 0.14);
-            draw.add_rect_filled_multicolor([gx0, y0], [gx1, mid], top, top, base, base);
-            draw.add_rect_filled_multicolor([gx0, mid], [gx1, y1], base, base, bot, bot);
-            // 1px inner top highlight.
-            draw.add_line([gx0 + 1.0, y0 + 1.0], [gx1 - 1.0, y0 + 1.0], [1.0, 1.0, 1.0, 0.28])
-                .build();
+    let track = Rect::at(origin, [BAR_WIDTH, BAR_HEIGHT]);
+    {
+        // One list for the whole bar; the block closes before `dummy`.
+        let draw = ui.get_window_draw_list();
+
+        // The track behind the segments; shows through the gaps. Not
+        // `axi::bar`: the segments are three fractions, not one.
+        draw.add_rect(track.min, track.max, theme::GROUND).filled(true).build();
+
+        let mut x = origin[0];
+        for (i, (color, _count)) in segments.iter().copied().enumerate() {
+            let w = widths[i];
+            let seg = Rect::new([x, track.min[1]], [x + w, track.max[1]]);
+            if !seg.is_degenerate() {
+                draw.add_rect(seg.min, seg.max, color.rgba()).filled(true).build();
+            }
+
+            // Count label centered in the segment; the width floor above
+            // guarantees it fits. Near-black on the team ink, the same
+            // reason `--axi-accent-ink` is near-black.
+            let ts = label_sizes[i];
+            let tx = x + (w - ts[0]) * 0.5;
+            let ty = track.min[1] + (BAR_HEIGHT - ts[1]) * 0.5;
+            draw.add_text([tx, ty], theme::ACCENT_INK, &labels[i]);
+
+            x += w + SEG_GAP;
         }
 
-        // Count label centered in the segment; the width floor above
-        // guarantees it fits. Faint light offset underneath gives the
-        // dark text a crisper edge on the bright fill.
-        let label = &labels[i];
-        let ts = ui.calc_text_size(label);
-        let tx = x0 + (w - ts[0]) * 0.5;
-        let ty = y0 + (BAR_HEIGHT - ts[1]) * 0.5;
-        draw.add_text([tx, ty + 1.0], [1.0, 1.0, 1.0, 0.25], label);
-        draw.add_text([tx, ty], SEG_TEXT, label);
-
-        glow_spans.push((x0, x1, color));
-        x = x1 + SEG_GAP;
-    }
-
-    // Crisp dark outline around the whole bar, over the segments.
-    draw.add_rect(
-        [origin[0] - 0.5, y0 - 0.5],
-        [origin[0] + BAR_WIDTH + 0.5, y1 + 0.5],
-        BAR_OUTLINE,
-    )
-    .rounding(BAR_ROUNDING)
-    .thickness(1.0)
-    .build();
-
-    let mut height = BAR_HEIGHT;
-    if !compact {
-        // Thin color-matched glow strip under the bar.
-        let gy0 = y1 + GLOW_GAP;
-        let gy1 = gy0 + GLOW_HEIGHT;
-        for (x0, x1, color) in glow_spans {
-            let mut c = color.rgba();
-            c[3] = 0.55;
-            draw.add_rect([x0, gy0], [x1, gy1], c)
-                .filled(true)
-                .rounding(1.5)
+        // One near-black outline around the whole bar, over the
+        // segments, its stroke inside the track's edge.
+        let path = axi::outline_path(track, theme::BORDER_CONTROL);
+        if !path.is_degenerate() {
+            draw.add_rect(path.min, path.max, theme::INK_LINE)
+                .thickness(theme::BORDER_CONTROL)
                 .build();
         }
-        height += GLOW_GAP + GLOW_HEIGHT;
     }
-    ui.dummy([BAR_WIDTH, height]);
+
+    ui.dummy([BAR_WIDTH, BAR_HEIGHT]);
 }
 
 fn draw_legend(ui: &Ui, counts: TeamCounts, self_color: Option<TeamColor>) {
@@ -299,23 +261,43 @@ fn draw_legend(ui: &Ui, counts: TeamCounts, self_color: Option<TeamColor>) {
 
     ui.dummy([BAR_WIDTH, 4.0]);
     let origin = ui.cursor_screen_pos();
-    let draw = ui.get_window_draw_list();
     let line_h = ui.text_line_height();
     let mut x = origin[0] + ((BAR_WIDTH - total_w) * 0.5).max(0.0);
     let cy = origin[1] + line_h * 0.5;
 
+    // Lay out first, draw second: `axi::diamond` takes its own draw
+    // list, so it must not be called while one is held here.
+    struct Item { center: [f32; 2], size: f32, ink: [f32; 4], tx: f32, label: String }
+    let mut laid: Vec<Item> = Vec::with_capacity(items.len());
     for (color, label, mine) in items {
-        let cx = x + DOT_R;
-        draw.add_circle([cx, cy], DOT_R, color.rgba()).filled(true).build();
-        if mine {
-            let mut ring = color.rgba();
-            ring[3] = 0.30;
-            draw.add_circle([cx, cy], DOT_R + 2.0, ring).thickness(2.0).build();
-        }
-        let text_color = if mine { [1.0, 1.0, 1.0, 0.92] } else { [1.0, 1.0, 1.0, 0.60] };
         let tx = x + DOT_R * 2.0 + DOT_TEXT_GAP;
-        draw.add_text([tx, origin[1]], text_color, &label);
+        // The viewer's own team reads as a larger diamond; the old
+        // translucent ring is gone — rule 2 forbids colour at partial
+        // opacity over the ground.
+        let size = if mine { DOT_R * 2.0 + 3.0 } else { DOT_R * 2.0 };
+        laid.push(Item {
+            center: [x + DOT_R, cy],
+            size,
+            ink: color.rgba(),
+            tx,
+            label: label.clone(),
+        });
         x = tx + ui.calc_text_size(&label)[0] + ITEM_GAP;
     }
+
+    {
+        let draw = ui.get_window_draw_list();
+        for it in &laid {
+            // A legend label that identifies a coloured series wears
+            // that series' ink (ruling 7), not a ramp step. "You" is
+            // carried by the larger diamond and the "- you" suffix
+            // instead.
+            draw.add_text([it.tx, origin[1]], it.ink, &it.label);
+        }
+    }
+    for it in &laid {
+        axi::diamond(ui, it.center, it.size, it.ink);
+    }
+
     ui.dummy([BAR_WIDTH, line_h]);
 }
