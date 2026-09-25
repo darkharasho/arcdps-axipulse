@@ -201,3 +201,12 @@ tune the two steps independently.
   attempt at that derivation; two earlier ones were wrong) and a reader
   who checks the line and finds nothing would distrust the whole
   comment.
+- The guard scanner over-flags in two places — the opposite direction from
+  the five bypasses it has had, so nothing real slips past, but a future
+  edit can be blocked by a false positive. A colour-shaped array literal
+  inside a Rust **string literal** is scanned as code, and a `/* … */`
+  block whose interior lines do not start with `*` is scanned as code too,
+  so a colour literal quoted in prose inside such a comment is reported as
+  a violation. **To close:** strip string literals before scanning, and
+  track block-comment open/close as state rather than inferring it from a
+  leading `*`.
