@@ -351,9 +351,13 @@ fn draw_value_bar(
         let pad_left = 6.0 + theme::BORDER_CONTROL;
         let mut text_x = cursor[0] + pad_left;
         if let Some(handle) = icon {
-            let icon_h = row_h - 4.0 - theme::BORDER_CONTROL * 2.0;
+            // Full-size artwork: the outline stays where it is, and the
+            // image is NOT inset by its thickness. Insetting all four
+            // sides took a 20px icon to 14px in a 24px row, and these
+            // are identified at a glance mid-fight.
+            let icon_h = row_h - 4.0;
             let icon_w = (icon_h * handle.aspect).max(1.0);
-            let icon_y = cursor[1] + 2.0 + theme::BORDER_CONTROL;
+            let icon_y = cursor[1] + 2.0;
             draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
             text_x += icon_w + 6.0;
         }
@@ -601,9 +605,13 @@ fn draw_skill_bar(
         let pad_left = 6.0 + theme::BORDER_CONTROL;
         let mut text_x = cursor[0] + pad_left;
         if let Some(handle) = icon {
-            let icon_h = row_h - 4.0 - theme::BORDER_CONTROL * 2.0;
+            // Full-size artwork: the outline stays where it is, and the
+            // image is NOT inset by its thickness. Insetting all four
+            // sides took a 20px icon to 14px in a 24px row, and these
+            // are identified at a glance mid-fight.
+            let icon_h = row_h - 4.0;
             let icon_w = (icon_h * handle.aspect).max(1.0);
-            let icon_y = cursor[1] + 2.0 + theme::BORDER_CONTROL;
+            let icon_y = cursor[1] + 2.0;
             draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
             text_x += icon_w + 6.0;
         }
@@ -642,9 +650,13 @@ fn draw_boon_bar(ui: &Ui, fight: &FightData, id: u32, name: &str, frac: f32, lab
         let pad_left = 6.0 + theme::BORDER_CONTROL;
         let mut text_x = cursor[0] + pad_left;
         if let Some(handle) = icon {
-            let icon_h = row_h - 4.0 - theme::BORDER_CONTROL * 2.0;
+            // Full-size artwork: the outline stays where it is, and the
+            // image is NOT inset by its thickness. Insetting all four
+            // sides took a 20px icon to 14px in a 24px row, and these
+            // are identified at a glance mid-fight.
+            let icon_h = row_h - 4.0;
             let icon_w = (icon_h * handle.aspect).max(1.0);
-            let icon_y = cursor[1] + 2.0 + theme::BORDER_CONTROL;
+            let icon_y = cursor[1] + 2.0;
             draw.add_image(handle.tex, [text_x, icon_y], [text_x + icon_w, icon_y + icon_h]).build();
             text_x += icon_w + 6.0;
         } else {
@@ -692,12 +704,20 @@ fn render_fight_composition(ui: &Ui, derived: &Derived) {
     {
         let cursor = ui.cursor_screen_pos();
         let bar_h = 10.0;
-        // The track and its outline come from the bar helper; the
-        // segments are drawn inside it, one per group.
+        // A track with one segment per group drawn inside its outline.
         let track = Rect::at(cursor, [avail, bar_h]);
-        axi::bar(ui, track, 0.0, theme::GROUND);
         {
+            // Track only: this bar's quantity is carried by the segments
+            // below, not by one fill, so it does not go through
+            // `axi::bar` — a zero fraction there is an argument waiting
+            // to be "corrected" into a full-width wash.
             let draw = ui.get_window_draw_list();
+            draw.add_rect(track.min, track.max, theme::GROUND).filled(true).build();
+            let path = axi::outline_path(track, theme::BORDER_CONTROL);
+            if !path.is_degenerate() {
+                draw.add_rect(path.min, path.max, theme::INK_LINE)
+                    .thickness(theme::BORDER_CONTROL).build();
+            }
             let inner = track.inset(theme::BORDER_CONTROL);
             let mut x = inner.min[0];
             let seg_gap = 2.0;
@@ -731,7 +751,11 @@ fn render_fight_composition(ui: &Ui, derived: &Derived) {
             let bg = if active { theme::SURFACE_RAISED } else { theme::SURFACE };
             // The hit-test pass below lays an invisible button over this
             // exact rect, so the lift is honest: the pill is clickable.
-            let hovered = ui.is_mouse_hovering_rect([px, py], [px + pill_w, py + pill_h]);
+            // `is_mouse_hovering_rect` clips but ignores window z-order,
+            // so it is gated on THIS window being the hovered one — a
+            // pill under the options window must not light up.
+            let hovered = ui.is_window_hovered()
+                && ui.is_mouse_hovering_rect([px, py], [px + pill_w, py + pill_h]);
             axi::card(ui, Rect::at([px, py], [pill_w, pill_h]), bg, hovered);
             axi::diamond(
                 ui,
