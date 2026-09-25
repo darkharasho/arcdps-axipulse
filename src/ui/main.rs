@@ -10,13 +10,8 @@ use once_cell::sync::Lazy;
 
 use crate::config::Config;
 use crate::state::AppState;
-
-// --- palette (shared with pulse/timeline at a glance, kept local) -------
-
-const BG_WINDOW:     [f32; 4] = [0.055, 0.065, 0.085, 0.92];
-const TEXT_PRIMARY:  [f32; 4] = [0.97, 0.97, 1.00, 1.0];
-const TEXT_SECONDARY:[f32; 4] = [0.78, 0.78, 0.85, 1.0];
-const TEXT_MUTED:    [f32; 4] = [0.52, 0.54, 0.62, 1.0];
+use crate::ui::axi::{self, Rect};
+use crate::ui::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TopTab { Pulse, Timeline, Map }
@@ -37,21 +32,40 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     // Resolved before the window closure borrows `config` mutably.
     let accent = crate::ui::theme::accent(&config.accent);
 
+    // imgui paints WindowBg itself and clips the window draw list to
+    // the window rect, so we take the fill away from imgui and paint
+    // block, fill and outline ourselves, INWARD from the window edge.
+    // Consequence: this surface's opacity is one constant, not two
+    // code paths.
+    let form_tokens = theme::push_form(ui);
     let style_tokens = [
-        ui.push_style_var(StyleVar::WindowPadding([14.0, 12.0])),
-        ui.push_style_var(StyleVar::WindowRounding(10.0)),
-        ui.push_style_var(StyleVar::WindowBorderSize(0.0)),
-        ui.push_style_var(StyleVar::FrameRounding(6.0)),
+        // The body content must clear our own 4px outline, so the
+        // padding grows by BORDER_PANEL. Without this the first line of
+        // text sits on the outline.
+        ui.push_style_var(StyleVar::WindowPadding([
+            14.0 + theme::BORDER_PANEL,
+            12.0 + theme::BORDER_PANEL,
+        ])),
+        // timeline.rs's lane clearance depends on this spacing.
         ui.push_style_var(StyleVar::ItemSpacing([8.0, 8.0])),
     ];
     let color_tokens = [
-        ui.push_style_color(StyleColor::WindowBg,      BG_WINDOW),
-        ui.push_style_color(StyleColor::TitleBg,       [0.055, 0.065, 0.085, 0.95]),
-        ui.push_style_color(StyleColor::TitleBgActive, [0.085, 0.10,  0.13,  0.95]),
-        ui.push_style_color(StyleColor::Separator,     [1.0, 1.0, 1.0, 0.06]),
-        ui.push_style_color(StyleColor::Button,        [0.10, 0.12, 0.16, 1.0]),
-        ui.push_style_color(StyleColor::ButtonHovered, [0.14, 0.17, 0.22, 1.0]),
-        ui.push_style_color(StyleColor::ButtonActive,  [0.18, 0.22, 0.28, 1.0]),
+        ui.push_style_color(StyleColor::WindowBg, theme::TRANSPARENT),
+        ui.push_style_color(StyleColor::TitleBg, theme::SURFACE),
+        ui.push_style_color(StyleColor::TitleBgActive, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::Separator, theme::RULE),
+        ui.push_style_color(StyleColor::Text, theme::TEXT),
+        ui.push_style_color(StyleColor::TextDisabled, theme::TEXT_FAINT),
+        ui.push_style_color(StyleColor::Button, theme::SURFACE),
+        ui.push_style_color(StyleColor::ButtonHovered, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::ButtonActive, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::FrameBg, theme::SURFACE),
+        ui.push_style_color(StyleColor::FrameBgHovered, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::FrameBgActive, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::PopupBg, theme::SURFACE),
+        ui.push_style_color(StyleColor::Header, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::HeaderHovered, theme::SURFACE_RAISED),
+        ui.push_style_color(StyleColor::HeaderActive, theme::SURFACE_RAISED),
     ];
 
     let mut window = ui.window("AxiPulse").size([720.0, 600.0], Condition::FirstUseEver);
@@ -60,7 +74,12 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     }
     let mut open = true;
     window.opened(&mut open).build(|| {
-        render_header(ui, state);
+        // Our own fill, inside the window and inside the clip rect.
+        // ALPHA_READING: this is a surface you open in order to read.
+        let win = Rect::at(ui.window_pos(), ui.window_size());
+        axi::panel_inward(ui, win, theme::with_alpha(theme::SURFACE, theme::ALPHA_READING));
+
+        render_header(ui, state, accent);
         ui.dummy([0.0, 2.0]);
 
         // Resolve selected fight. If selection is stale (e.g. history is
@@ -82,7 +101,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
             return;
         };
 
-        render_top_tabs(ui);
+        render_top_tabs(ui, accent);
         ui.dummy([0.0, 4.0]);
 
         let tab = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
@@ -101,12 +120,13 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
 
     for tok in color_tokens { tok.pop(); }
     for tok in style_tokens { tok.pop(); }
+    for tok in form_tokens { tok.pop(); }
 }
 
 /// Header row: AxiPulse logo + brand label + (when parsing) a pulsing
 /// indicator on the left, and the fight-picker combo right-aligned on
 /// the same line.
-fn render_header(ui: &Ui, state: &AppState) {
+fn render_header(ui: &Ui, state: &AppState, accent: [f32; 4]) {
     let cursor = ui.cursor_screen_pos();
     let row_h = 28.0;
     let avail = ui.content_region_avail()[0].max(200.0);
@@ -128,13 +148,13 @@ fn render_header(ui: &Ui, state: &AppState) {
     let pulse_w = ui.calc_text_size("Pulse")[0];
     {
         let draw = ui.get_window_draw_list();
-        draw.add_text([x, brand_text_y], TEXT_PRIMARY, "Axi");
-        draw.add_text([x + axi_w, brand_text_y], [0.31, 0.86, 0.61, 1.0], "Pulse");
+        draw.add_text([x, brand_text_y], theme::TEXT, "Axi");
+        draw.add_text([x + axi_w, brand_text_y], accent, "Pulse");
     }
     let brand_end_x = x + axi_w + pulse_w;
     let is_parsing = crate::plugin::is_parsing();
     if is_parsing {
-        render_parsing_pulse(ui, brand_end_x + 14.0, cursor[1] + row_h * 0.5, brand_text_y);
+        render_parsing_pulse(ui, brand_end_x + 14.0, cursor[1] + row_h * 0.5, brand_text_y, accent);
     }
 
     // --- Right-aligned fight picker on the same row ---
@@ -152,17 +172,20 @@ fn render_header(ui: &Ui, state: &AppState) {
 fn render_update_pill(ui: &arcdps::imgui::Ui) {
     use crate::updater::{snapshot, start_install, dismiss_error, UpdateState};
     let st = snapshot();
+    // Rule 6: META is the cool ink reserved for meta, and an update's
+    // download progress is exactly that — information about the
+    // software rather than about the fight.
     let (label, color) = match &st {
         UpdateState::Available { tag, .. } =>
-            (format!("Update available \u{00b7} {tag}"), [0.40, 0.92, 0.55, 1.0]),
+            (format!("Update available \u{00b7} {tag}"), theme::OK),
         UpdateState::Downloading { pct, .. } if pct.is_finite() =>
-            (format!("Downloading... {:.0}%", pct), [0.50, 0.78, 1.0, 1.0]),
+            (format!("Downloading... {:.0}%", pct), theme::META),
         UpdateState::Downloading { .. } =>
-            ("Downloading...".to_string(), [0.50, 0.78, 1.0, 1.0]),
+            ("Downloading...".to_string(), theme::META),
         UpdateState::Installed { tag } =>
-            (format!("Restart GW2 to load {tag}"), [0.95, 0.75, 0.40, 1.0]),
+            (format!("Restart GW2 to load {tag}"), theme::WARN),
         UpdateState::Failed { msg } =>
-            (format!("Update failed: {msg}"), [1.00, 0.40, 0.40, 1.0]),
+            (format!("Update failed: {msg}"), theme::DANGER),
         _ => return,
     };
     ui.text_colored(color, &label);
@@ -183,7 +206,7 @@ fn render_update_pill(ui: &arcdps::imgui::Ui) {
 
 /// Heartbeat icon (lucide Activity) pulsed in scale + alpha, mirroring
 /// the `heartbeat-pulse` animation AxiPulse's web UI uses.
-fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32) {
+fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32, accent: [f32; 4]) {
     use std::time::Instant;
     static START: once_cell::sync::Lazy<Instant> = once_cell::sync::Lazy::new(Instant::now);
     let t = START.elapsed().as_secs_f32();
@@ -206,40 +229,35 @@ fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32) {
         let half = icon_size * 0.5;
         let x0 = cx - half;
         let y0 = cy - half;
-        // Soft halo behind so the beat reads even on a busy backdrop.
-        // Alpha-driven so it shrinks/expands with the beat.
+        // Square halo: the language has no soft round glow. Scaled
+        // with the beat so the pulse still reads on a busy backdrop.
         let halo_r = icon_size * 0.65 + 2.0 * intensity;
-        let halo_color = [0.31, 0.86, 0.61, 0.10 + 0.25 * intensity * alpha];
-        draw.add_rect(
-            [cx - halo_r, cy - halo_r],
-            [cx + halo_r, cy + halo_r],
-            halo_color,
-        ).filled(true).rounding(halo_r).build();
+        let halo = theme::with_alpha(accent, 0.10 + 0.25 * intensity * alpha);
+        draw.add_rect([cx - halo_r, cy - halo_r], [cx + halo_r, cy + halo_r], halo)
+            .filled(true)
+            .build();
         // No tint on the texture itself — the vendored imgui binding's
         // image-tint path appears to crash the host under Wine when
-        // exercised. The icon was rasterised already coloured #50dba0
-        // so untinted is fine.
-        draw.add_image(
-            handle.tex,
-            [x0, y0],
-            [x0 + icon_size, y0 + icon_size],
-        ).build();
+        // exercised. The icon was rasterised already coloured so
+        // untinted is fine.
+        draw.add_image(handle.tex, [x0, y0], [x0 + icon_size, y0 + icon_size]).build();
     } else {
         // Bundled icon not loaded yet (D3D11 device unavailable on the
-        // first frame). Fall back to the simple dot so we still show
+        // first frame). Fall back to the family motif so we still show
         // *some* parsing indicator.
-        let r = 5.0 + 2.0 * intensity;
-        let dot_color = [0.31, 0.86, 0.61, alpha];
-        draw.add_rect([cx - r, cy - r], [cx + r, cy + r], dot_color)
-            .filled(true).rounding(r).build();
+        //
+        // `drop(draw)` first: `get_window_draw_list` hands out a
+        // mutable borrow and `axi::diamond` takes its own.
+        drop(draw);
+        axi::diamond(ui, [cx, cy], 10.0 + 4.0 * intensity, theme::with_alpha(accent, alpha));
     }
 
-    // "parsing…" label to the right of the icon, slightly muted, alpha
-    // pulses with the beat.
+    // "parsing..." label to the right of the icon, faint, alpha pulses
+    // with the beat.
     let label = "parsing...";
-    let mut text_color = TEXT_MUTED;
-    text_color[3] = 0.60 + 0.35 * intensity;
-    draw.add_text([cx + base_size * 0.6 + 8.0, label_y], text_color, label);
+    let text_color = theme::with_alpha(theme::TEXT_FAINT, 0.60 + 0.35 * intensity);
+    ui.get_window_draw_list()
+        .add_text([cx + base_size * 0.6 + 8.0, label_y], text_color, label);
 }
 
 /// Combo dropdown listing "Latest" + each entry in `AppState.history`,
@@ -296,26 +314,38 @@ fn render_fight_picker_combo(ui: &Ui, state: &AppState) {
     if let Ok(mut g) = FIGHT_SEL.lock() { *g = sel; }
 }
 
-fn render_top_tabs(ui: &Ui) {
+/// The top tabs as blocked controls: the selected one wears the accent
+/// with near-black ink, the rest surface with dim text, and only the
+/// hovered one lifts — they are buttons, so the lift is honest.
+/// `axi::chip` lays all of that down, the same way Pulse's and
+/// Timeline's own strips do.
+fn render_top_tabs(ui: &Ui, accent: [f32; 4]) {
     let mut current = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
     let tabs = [("Pulse", TopTab::Pulse), ("Timeline", TopTab::Timeline), ("Map", TopTab::Map)];
-    let n = tabs.len();
-    for (i, (label, tab)) in tabs.iter().enumerate() {
-        let selected = current == *tab;
-        let tokens = if selected {
-            vec![
-                ui.push_style_color(StyleColor::Button,        [0.18, 0.22, 0.30, 1.0]),
-                ui.push_style_color(StyleColor::ButtonHovered, [0.22, 0.26, 0.34, 1.0]),
-                ui.push_style_color(StyleColor::ButtonActive,  [0.24, 0.28, 0.36, 1.0]),
-                ui.push_style_color(StyleColor::Text,          TEXT_PRIMARY),
-            ]
-        } else {
-            vec![ui.push_style_color(StyleColor::Text, TEXT_SECONDARY)]
-        };
-        if ui.button(label) { current = *tab; }
-        for t in tokens { t.pop(); }
-        if i + 1 < n { ui.same_line(); }
+    let pad = [14.0_f32, 6.0_f32];
+    let h = ui.text_line_height() + pad[1] * 2.0;
+
+    let origin = ui.cursor_screen_pos();
+    let mut x = origin[0];
+    for (label, tab) in tabs.iter() {
+        let (clicked, w) = axi::chip(
+            ui,
+            [x, origin[1]],
+            &format!("top-tab-{label}"),
+            label,
+            current == *tab,
+            accent,
+            pad,
+        );
+        if clicked { current = *tab; }
+        // Clear the neighbour's offset block before the next chip.
+        x += w + theme::OFFSET_CONTROL + 6.0;
     }
+    // Reserve the strip's span with a regular item rather than an
+    // absolute cursor, so the content below it is not overdrawn.
+    ui.set_cursor_screen_pos(origin);
+    ui.dummy([x - origin[0], h + theme::OFFSET_CONTROL]);
+
     if let Ok(mut g) = TOP_TAB.lock() { *g = current; }
 }
 
