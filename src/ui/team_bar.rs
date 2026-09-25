@@ -109,7 +109,11 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
             _ => {
                 let msg = "Waiting for a parsed fight...";
                 let tw = ui.calc_text_size(msg)[0];
-                let indent = ((BAR_WIDTH - tw) * 0.5).max(0.0);
+                // Centre on the panel FACE, not the window. `panel_inward`
+                // takes `OFFSET_PANEL` off the right edge for the block, so
+                // the face is that much narrower than the content region
+                // this text is laid out in.
+                let indent = ((BAR_WIDTH - theme::OFFSET_PANEL - tw) * 0.5).max(0.0);
                 let [cx, cy] = ui.cursor_pos();
                 ui.set_cursor_pos([cx + indent, cy]);
                 ui.text_disabled(msg);
