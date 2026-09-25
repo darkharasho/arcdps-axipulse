@@ -83,25 +83,44 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         // outer-rect panel loses its top outline always and its right
         // outline plus offset block the moment a scrollbar appears.
         //
-        // The inner rect is reconstructed exactly from two safe
-        // accessors, taken here as the closure's first statement while
-        // the cursor is still at its start position:
+        // The inner rect is reconstructed from three safe accessors,
+        // taken here as the closure's first statement while the cursor
+        // is still at its start position. Written as the substitution so
+        // the next reader can check it rather than trust it — imgui.cpp
+        // line numbers are the pinned fork's imgui-master copy:
         //
-        //   cursor_screen_pos()                         = ContentRegionRect.Min
-        //   + content_region_avail()                    = ContentRegionRect.Max
+        //   cursor_screen_pos() = DC.CursorPos = DC.CursorStartPos
+        //                       = Pos + Pad - Scroll + Deco1        (8003-8006)
+        //                       = ContentRegionRect.Min             (7990-7991)
+        //   content_region_avail() = ContentRegionRect.Max - CursorPos
+        //                          = Size - 2*Pad - Deco1 - Deco2   (7992-7993)
         //
-        // and ContentRegionRect is precisely InnerRect inset by
-        // WindowPadding, so re-expanding by the padding we pushed gives
-        // InnerRect in screen space. Both terms carry the scroll offset
-        // and the scrollbar deduction already, so this is correct with a
-        // scrollbar and without one, scrolled or not.
+        // so, with Pad == WINDOW_PAD (the padding we pushed ourselves):
+        //
+        //   cursor - Pad          = Pos + Deco1 - Scroll
+        //   cursor + avail + Pad  = Pos + Size - Deco2 - Scroll
+        //   InnerRect             = [Pos + Deco1, Pos + Size - Deco2]
+        //
+        // i.e. the padding re-expansion alone yields InnerRect MINUS
+        // Scroll. `- Scroll` appears with the SAME sign in both corners
+        // (it is baked into ContentRegionRect.Min, which .Max is derived
+        // from), so it does NOT cancel; it has to be added back. Adding
+        // it lands on InnerRect exactly, whatever the scroll position.
+        //
+        // Deco1 is the title-bar height and Deco2 the scrollbar sizes,
+        // both already inside the two accessors, so the scrollbar-present
+        // and scrollbar-absent cases need no special casing.
         let content_min = ui.cursor_screen_pos();
         let avail = ui.content_region_avail();
+        let scroll = [ui.scroll_x(), ui.scroll_y()];
         let inner = Rect::new(
-            [content_min[0] - WINDOW_PAD[0], content_min[1] - WINDOW_PAD[1]],
             [
-                content_min[0] + avail[0] + WINDOW_PAD[0],
-                content_min[1] + avail[1] + WINDOW_PAD[1],
+                content_min[0] - WINDOW_PAD[0] + scroll[0],
+                content_min[1] - WINDOW_PAD[1] + scroll[1],
+            ],
+            [
+                content_min[0] + avail[0] + WINDOW_PAD[0] + scroll[0],
+                content_min[1] + avail[1] + WINDOW_PAD[1] + scroll[1],
             ],
         );
         axi::panel_inward(ui, inner, theme::with_alpha(theme::SURFACE, theme::ALPHA_READING));
