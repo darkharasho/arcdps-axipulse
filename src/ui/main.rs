@@ -13,6 +13,12 @@ use crate::state::AppState;
 use crate::ui::axi::{self, Rect};
 use crate::ui::theme;
 
+/// The window's `WindowPadding`. Named rather than inlined because the
+/// inward panel reconstructs the window's inner rect by re-expanding the
+/// content region by exactly this, so the two must never drift. The
+/// `+ BORDER_PANEL` is what keeps body text off our own 4px outline.
+const WINDOW_PAD: [f32; 2] = [14.0 + theme::BORDER_PANEL, 12.0 + theme::BORDER_PANEL];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TopTab { Pulse, Timeline, Map }
 
@@ -39,13 +45,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     // code paths.
     let form_tokens = theme::push_form(ui);
     let style_tokens = [
-        // The body content must clear our own 4px outline, so the
-        // padding grows by BORDER_PANEL. Without this the first line of
-        // text sits on the outline.
-        ui.push_style_var(StyleVar::WindowPadding([
-            14.0 + theme::BORDER_PANEL,
-            12.0 + theme::BORDER_PANEL,
-        ])),
+        ui.push_style_var(StyleVar::WindowPadding(WINDOW_PAD)),
         // timeline.rs's lane clearance depends on this spacing.
         ui.push_style_var(StyleVar::ItemSpacing([8.0, 8.0])),
     ];
@@ -76,8 +76,35 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     window.opened(&mut open).build(|| {
         // Our own fill, inside the window and inside the clip rect.
         // ALPHA_READING: this is a surface you open in order to read.
-        let win = Rect::at(ui.window_pos(), ui.window_size());
-        axi::panel_inward(ui, win, theme::with_alpha(theme::SURFACE, theme::ALPHA_READING));
+        //
+        // NOT window_pos()/window_size(): that is the OUTER rect, and
+        // Begin pushes a clip rect of the INNER rect (title bar removed
+        // from the top, scrollbars removed from the right/bottom), so an
+        // outer-rect panel loses its top outline always and its right
+        // outline plus offset block the moment a scrollbar appears.
+        //
+        // The inner rect is reconstructed exactly from two safe
+        // accessors, taken here as the closure's first statement while
+        // the cursor is still at its start position:
+        //
+        //   cursor_screen_pos()                         = ContentRegionRect.Min
+        //   + content_region_avail()                    = ContentRegionRect.Max
+        //
+        // and ContentRegionRect is precisely InnerRect inset by
+        // WindowPadding, so re-expanding by the padding we pushed gives
+        // InnerRect in screen space. Both terms carry the scroll offset
+        // and the scrollbar deduction already, so this is correct with a
+        // scrollbar and without one, scrolled or not.
+        let content_min = ui.cursor_screen_pos();
+        let avail = ui.content_region_avail();
+        let inner = Rect::new(
+            [content_min[0] - WINDOW_PAD[0], content_min[1] - WINDOW_PAD[1]],
+            [
+                content_min[0] + avail[0] + WINDOW_PAD[0],
+                content_min[1] + avail[1] + WINDOW_PAD[1],
+            ],
+        );
+        axi::panel_inward(ui, inner, theme::with_alpha(theme::SURFACE, theme::ALPHA_READING));
 
         render_header(ui, state, accent);
         ui.dummy([0.0, 2.0]);
@@ -224,36 +251,48 @@ fn render_parsing_pulse(ui: &Ui, cx: f32, cy: f32, label_y: f32, accent: [f32; 4
 
     let icon = crate::ui::icons::lookup_bundled("__heartbeat__");
 
-    let draw = ui.get_window_draw_list();
-    if let Some(handle) = icon {
-        let half = icon_size * 0.5;
-        let x0 = cx - half;
-        let y0 = cy - half;
-        // Square halo: the language has no soft round glow. Scaled
-        // with the beat so the pulse still reads on a busy backdrop.
-        let halo_r = icon_size * 0.65 + 2.0 * intensity;
-        let halo = theme::with_alpha(accent, 0.10 + 0.25 * intensity * alpha);
-        draw.add_rect([cx - halo_r, cy - halo_r], [cx + halo_r, cy + halo_r], halo)
-            .filled(true)
-            .build();
-        // No tint on the texture itself — the vendored imgui binding's
-        // image-tint path appears to crash the host under Wine when
-        // exercised. The icon was rasterised already coloured so
-        // untinted is fine.
-        draw.add_image(handle.tex, [x0, y0], [x0 + icon_size, y0 + icon_size]).build();
-    } else {
-        // Bundled icon not loaded yet (D3D11 device unavailable on the
-        // first frame). Fall back to the family motif so we still show
-        // *some* parsing indicator.
-        //
-        // `drop(draw)` first: `get_window_draw_list` hands out a
-        // mutable borrow and `axi::diamond` takes its own.
-        drop(draw);
+    // `get_window_draw_list` takes a GLOBAL single-instance lock and
+    // panics if a second list is acquired while the first is alive
+    // (arcdps-imgui `draw_list.rs::lock_draw_list`). A panic here
+    // crosses the arcdps FFI boundary, so the lifetime is structural
+    // rather than incidental: the list below is confined to a block
+    // that ends before anything else needs one, and `axi::diamond`
+    // takes its own. Do not flatten this block, and do not acquire a
+    // second list inside it.
+    let mut fallback = false;
+    {
+        let draw = ui.get_window_draw_list();
+        if let Some(handle) = icon {
+            let half = icon_size * 0.5;
+            let x0 = cx - half;
+            let y0 = cy - half;
+            // Square halo: the language has no soft round glow. Scaled
+            // with the beat so the pulse still reads on a busy backdrop.
+            let halo_r = icon_size * 0.65 + 2.0 * intensity;
+            let halo = theme::with_alpha(accent, 0.10 + 0.25 * intensity * alpha);
+            draw.add_rect([cx - halo_r, cy - halo_r], [cx + halo_r, cy + halo_r], halo)
+                .filled(true)
+                .build();
+            // No tint on the texture itself — the vendored imgui
+            // binding's image-tint path appears to crash the host under
+            // Wine when exercised. The icon was rasterised already
+            // coloured so untinted is fine.
+            draw.add_image(handle.tex, [x0, y0], [x0 + icon_size, y0 + icon_size]).build();
+        } else {
+            // Bundled icon not loaded yet (D3D11 device unavailable on
+            // the first frame). Drawn after this block, not here, so it
+            // is not holding the list open.
+            fallback = true;
+        }
+    }
+    if fallback {
+        // Fall back to the family motif so we still show *some* parsing
+        // indicator.
         axi::diamond(ui, [cx, cy], 10.0 + 4.0 * intensity, theme::with_alpha(accent, alpha));
     }
 
     // "parsing..." label to the right of the icon, faint, alpha pulses
-    // with the beat.
+    // with the beat. Painted last, as it was before the conversion.
     let label = "parsing...";
     let text_color = theme::with_alpha(theme::TEXT_FAINT, 0.60 + 0.35 * intensity);
     ui.get_window_draw_list()
@@ -341,8 +380,12 @@ fn render_top_tabs(ui: &Ui, accent: [f32; 4]) {
         // Clear the neighbour's offset block before the next chip.
         x += w + theme::OFFSET_CONTROL + 6.0;
     }
-    // Reserve the strip's span with a regular item rather than an
-    // absolute cursor, so the content below it is not overdrawn.
+    // Reserve the strip's span with a regular item rather than parking
+    // the cursor absolutely, so the strip stays in the layout and in the
+    // window's content-size calculation and the chips' offset blocks are
+    // not overdrawn. This leaves the cursor one ItemSpacing.y (8px)
+    // BELOW where an absolute park would have left it; the extra 8px is
+    // deliberate and matches pulse.rs's and timeline.rs's strips.
     ui.set_cursor_screen_pos(origin);
     ui.dummy([x - origin[0], h + theme::OFFSET_CONTROL]);
 
