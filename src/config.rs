@@ -33,6 +33,12 @@ pub struct Config {
     pub team_bar_compact: bool,
     /// Background check for a newer release on plugin init.
     pub auto_update_check: bool,
+    /// axi-design accent id, from the design package's `accents.json`.
+    /// Drives chrome only — never a team, boon or metric colour.
+    /// Unknown values fall back to emerald-mint at read time rather
+    /// than at load time, so a config we did not write is never
+    /// silently rewritten.
+    pub accent: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +86,7 @@ impl Default for Config {
             team_bar_pos: None,
             team_bar_compact: false,
             auto_update_check: true,
+            accent: crate::ui::theme::DEFAULT_ACCENT_ID.to_string(),
         }
     }
 }

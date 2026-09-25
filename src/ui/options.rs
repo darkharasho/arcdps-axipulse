@@ -28,6 +28,33 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
     ui.text("AxiPulse");
     ui.separator();
     let mut dirty = false;
+
+    // Accent. The pane itself keeps arcdps's styling: it lives inside
+    // arcdps's own window, and restyling it would make it look foreign
+    // in its host. It gains this one control and nothing else.
+    let labels = crate::ui::theme::accent_labels();
+    let mut idx = crate::ui::theme::accent_index(&config.accent);
+    ui.text("Accent:");
+    ui.same_line();
+    let _w = ui.push_item_width(180.0);
+    if ui.combo_simple_string("##axi-accent", &mut idx, &labels) {
+        if let Some((id, _, _)) = crate::ui::theme::ACCENTS.get(idx) {
+            config.accent = (*id).to_string();
+            dirty = true;
+        }
+    }
+    drop(_w);
+    ui.same_line();
+    ui.text_colored(
+        crate::ui::theme::accent(&config.accent),
+        "\u{25c6}",
+    );
+    ui.text_disabled(
+        "Colours the overlay's chrome — tabs, panels, highlights. Team, \
+         boon and metric colours never change.",
+    );
+    ui.separator();
+
     dirty |= render_hotkey_row(
         ui,
         "Toggle visibility",
@@ -74,7 +101,7 @@ pub fn render_options_end(ui: &Ui, config: &mut Config) {
         config.cbtlogs_path.clone()
     };
     let exists = std::path::Path::new(&effective).is_dir();
-    let status_color = if exists { [0.40, 0.92, 0.55, 1.0] } else { [1.00, 0.40, 0.40, 1.0] };
+    let status_color = if exists { crate::ui::theme::OK } else { crate::ui::theme::DANGER };
     let status = if exists { "found" } else { "not found" };
     ui.text_disabled(format!("Auto-detected: {detected}"));
     ui.text("Override path:");

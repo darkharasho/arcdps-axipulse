@@ -42,8 +42,7 @@ const DEFERRED: [&str; 5] = [
 /// entry; the list reaching empty is the conversion being done. Unlike
 /// DEFERRED this is temporary scaffolding — if you are reading this
 /// after the branch merged and it is non-empty, something was skipped.
-const PENDING: [&str; 6] = [
-    "src/ui/options.rs",
+const PENDING: [&str; 5] = [
     "src/ui/main.rs",
     "src/ui/pulse.rs",
     "src/ui/timeline.rs",
@@ -199,9 +198,16 @@ fn bracket_bodies(text: &str) -> Vec<(usize, String)> {
 /// The argument text of every `rounding(` / `Rounding(` call on a line.
 fn rounding_args(line: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let bytes = line.as_bytes();
     let mut i = 0usize;
-    while i < bytes.len() {
+    while i < line.len() {
+        if !line.is_char_boundary(i) {
+            // Advancing one byte at a time can land inside a multi-byte
+            // UTF-8 character (e.g. an em dash in a nearby string
+            // literal); skip forward to the next real boundary rather
+            // than slicing mid-character.
+            i += 1;
+            continue;
+        }
         let rest = &line[i..];
         let hit = rest.starts_with("rounding(") || rest.starts_with("Rounding(");
         if !hit {
