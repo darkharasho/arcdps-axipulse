@@ -112,6 +112,24 @@ tune the two steps independently.
   question this conversion did not ask. **To close:** decide on a
   halo-free treatment for the heartbeat icon.
 
+- **`src/ui/pulse.rs:793-794`** — the SAME never-advance-`py` wrap bug as
+  the item above, in the composition row's *hit-test* pass rather than its
+  draw pass. Both passes wrap identically wrong, so the two agree with each
+  other; the consequence is the colliding hit targets described above, not
+  a draw/hit mismatch. Pre-existing. **To close:** fix both passes
+  together, or they will disagree.
+- **Several partial-opacity fills in `pulse.rs` were removed outright, not
+  ported.** Pre-conversion, the skill bar tinted its fill at
+  `accent[3] = 0.55`, the boon sub-bars drew at `0.55`, and the hero
+  numbers carried a `[0, 0, 0, 0.55]` text shadow. None survive: `grep
+  0.55 src/ui/pulse.rs` is now empty. This was deliberate — rule 2 forbids
+  colour at partial opacity over the ground, and rule 7 says a quantity is
+  drawn as length, never intensity — but it is a visible change to a
+  reading surface and it was never written down. Recording it so it is
+  found as a decision. **To close:** nothing, unless the flat fills read
+  worse in-game than the tinted ones did; if so the answer is a different
+  ink, not a restored alpha.
+
 ## Cosmetic, needs a look at GW2 UI scale
 
 - The boon-name plate in `timeline.rs` reads as eight small dark
