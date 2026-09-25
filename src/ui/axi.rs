@@ -134,6 +134,33 @@ pub fn block_parts(r: Rect, offset: f32) -> [Rect; 2] {
     ]
 }
 
+/// The inward block: everything in `window` that `inward_body` gave up,
+/// as a right column and a bottom row.
+///
+/// This is NOT `block_parts` applied to the body, and the difference is
+/// the corners. A free-standing block is the face's own rect shifted
+/// down and right, so it starts an offset BELOW the face's top and an
+/// offset RIGHT of its left — the top-right and bottom-left corners are
+/// notched, exactly as `box-shadow: 6px 6px 0` notches them. An inward
+/// block has nothing to fall onto and is not a shadow: it is the frame
+/// the window keeps for itself, and the desktop app draws it with
+/// `box-shadow: inset -6px -6px 0`, whose L runs the window's full
+/// height and full width and meets square at both corners. Deriving it
+/// from the window rather than the body is what keeps the two apps
+/// drawing the same shape.
+pub fn inward_block_parts(window: Rect, offset: f32) -> [Rect; 2] {
+    // NaN loses to `max`, so a non-finite offset reads as no block.
+    let o = offset.max(0.0);
+    let [x0, y0] = window.min;
+    let [x1, y1] = window.max;
+    let split_x = (x1 - o).max(x0);
+    let split_y = (y1 - o).max(y0);
+    [
+        Rect::new([split_x, y0], [x1, y1]),
+        Rect::new([x0, split_y], [split_x, y1]),
+    ]
+}
+
 /// The body rect for a window whose block must be drawn INWARD: the
 /// window shrunk on its right and bottom by `offset`, so
 /// `block_path(body, offset)` lands flush with the window's own edge
@@ -237,10 +264,17 @@ pub fn outline_on(draw: &DrawListMut, r: Rect, thickness: f32, ink: [f32; 4]) {
 /// fill or it covers it.
 #[cfg(windows)]
 fn blocked(ui: &Ui, r: Rect, fill: [f32; 4], border: f32, offset: f32) {
+    blocked_with(ui, r, fill, border, block_parts(r, offset));
+}
+
+/// `blocked` with the block's bands supplied, for the inward scheme,
+/// whose block is a different shape from a free-standing one.
+#[cfg(windows)]
+fn blocked_with(ui: &Ui, r: Rect, fill: [f32; 4], border: f32, bands: [Rect; 2]) {
     if r.is_degenerate() { return; }
     let draw = ui.get_window_draw_list();
 
-    for band in block_parts(r, offset) {
+    for band in bands {
         if !band.is_degenerate() {
             draw.add_rect(band.min, band.max, theme::INK_LINE)
                 .filled(true).build();
@@ -316,7 +350,8 @@ pub fn chip(
 #[cfg(windows)]
 pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
     let body = inward_body(window, theme::OFFSET_PANEL);
-    blocked(ui, body, fill, theme::BORDER_PANEL, theme::OFFSET_PANEL);
+    let bands = inward_block_parts(window, theme::OFFSET_PANEL);
+    blocked_with(ui, body, fill, theme::BORDER_PANEL, bands);
     body
 }
 
@@ -334,9 +369,16 @@ pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
 /// Call this as the LAST thing in the window body. A fixed-size dummy
 /// cannot feed back into the auto-resize the way moving the cursor up
 /// would.
+///
+/// `ItemSpacing` is zeroed for the dummy because imgui charges spacing
+/// BEFORE an item, not after: a plain dummy would reserve the offset
+/// plus a whole item gap, which is most of a line of dead space at the
+/// foot of a HUD surface that is only a few lines tall.
 #[cfg(windows)]
 pub fn reserve_inward_block(ui: &Ui) {
+    let tight = ui.push_style_var(arcdps::imgui::StyleVar::ItemSpacing([0.0, 0.0]));
     ui.dummy([0.0, theme::OFFSET_PANEL]);
+    tight.end();
 }
 
 /// A quantity as length: an outlined track with a filled bar in it.

@@ -29,7 +29,10 @@ const BAR_WIDTH: f32 = 264.0;
 /// and `draw_bar` / `draw_header` lay out against `BAR_WIDTH` assuming
 /// they are exactly equal.
 const PAD_X: f32 = 12.0 + theme::BORDER_PANEL;
-const PAD_Y: f32 = 9.0 + theme::BORDER_PANEL;
+/// The bar is a glance surface, not a reading one: the y term is the
+/// gap left INSIDE the outline, so it is deliberately tighter than the
+/// x term, which has to keep the bar clear of the window's corners.
+const PAD_Y: f32 = 4.0 + theme::BORDER_PANEL;
 /// Sized so the content region is exactly `BAR_WIDTH` by construction.
 /// `SetNextWindowSize` with `Condition::Always` overrides
 /// `ALWAYS_AUTO_RESIZE` on x, so imgui will not absorb a mismatch.

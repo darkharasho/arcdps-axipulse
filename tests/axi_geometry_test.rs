@@ -265,6 +265,35 @@ fn inward_body_leaves_exactly_the_offset_for_the_block() {
 }
 
 #[test]
+fn inward_block_is_a_square_l_that_tiles_the_window_with_the_body() {
+    // The desktop app draws this block as `inset -6px -6px 0`, whose L
+    // reaches both corners. A shifted-rect block would notch the
+    // top-right and bottom-left by the offset.
+    let window = r(0.0, 0.0, 300.0, 400.0);
+    let body = axi::inward_body(window, 6.0);
+    let [right, bottom] = axi::inward_block_parts(window, 6.0);
+    assert_eq!(right, r(294.0, 0.0, 300.0, 400.0), "the column runs the full height");
+    assert_eq!(bottom, r(0.0, 394.0, 294.0, 400.0), "the row meets it square");
+    // Body plus block tile the window exactly, with no overlap.
+    let area = |x: axi::Rect| x.w() * x.h();
+    assert_eq!(area(body) + area(right) + area(bottom), area(window));
+    assert!(right.min[0] >= body.max[0] && bottom.min[1] >= body.max[1]);
+}
+
+#[test]
+fn inward_block_never_inverts_on_a_window_smaller_than_the_offset() {
+    let tiny = r(0.0, 0.0, 4.0, 3.0);
+    for band in axi::inward_block_parts(tiny, 6.0) {
+        assert!(band.max[0] >= band.min[0] && band.max[1] >= band.min[1]);
+    }
+    for o in [0.0, -6.0, f32::NAN] {
+        for band in axi::inward_block_parts(r(0.0, 0.0, 50.0, 50.0), o) {
+            assert!(band.is_degenerate(), "offset {o} must draw no block");
+        }
+    }
+}
+
+#[test]
 fn inward_body_never_inverts_on_a_window_smaller_than_the_offset() {
     let tiny = r(0.0, 0.0, 4.0, 3.0);
     let body = axi::inward_body(tiny, 6.0);
