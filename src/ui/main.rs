@@ -34,6 +34,9 @@ static FIGHT_SEL: Lazy<Mutex<FightSel>> = Lazy::new(|| Mutex::new(FightSel::Late
 pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
     if !config.show_pulse { return; }
 
+    // Resolved before the window closure borrows `config` mutably.
+    let accent = crate::ui::theme::accent(&config.accent);
+
     let style_tokens = [
         ui.push_style_var(StyleVar::WindowPadding([14.0, 12.0])),
         ui.push_style_var(StyleVar::WindowRounding(10.0)),
@@ -85,7 +88,7 @@ pub fn render(ui: &Ui, state: &AppState, config: &mut Config) {
         let tab = TOP_TAB.lock().ok().map(|g| *g).unwrap_or(TopTab::Pulse);
         let derived = record.derived.as_ref();
         match tab {
-            TopTab::Pulse    => crate::ui::pulse::render_content(ui, fight, idx, derived),
+            TopTab::Pulse    => crate::ui::pulse::render_content(ui, fight, idx, derived, accent),
             TopTab::Timeline => crate::ui::timeline::render_content(ui, fight, idx, derived, &mut config.timeline_layers),
             TopTab::Map      => crate::ui::map::render_content(ui, fight, idx, derived, &record.log_path),
         }
