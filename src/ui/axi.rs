@@ -446,9 +446,20 @@ pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
 /// BEFORE an item, not after: a plain dummy would reserve the offset
 /// plus a whole item gap, which is most of a line of dead space at the
 /// foot of a HUD surface that is only a few lines tall.
+///
+/// The open line is closed first. A body that ends with `same_line()`
+/// leaves a line open, and a zero-width dummy emitted onto a line
+/// taller than the offset reserves nothing at all — the face's bottom
+/// padding stays short and the content sits half the offset low. imgui
+/// has no "is a line open" query, and `new_line()` inserts a whole
+/// BLANK line when none is, so a sub-pixel dummy goes first: it lifts
+/// the current line height above zero either way, which is the
+/// condition `new_line()` branches on, and costs a fraction of a pixel.
 #[cfg(windows)]
 pub fn reserve_inward_block(ui: &Ui) {
     let tight = ui.push_style_var(arcdps::imgui::StyleVar::ItemSpacing([0.0, 0.0]));
+    ui.dummy([0.0, f32::EPSILON]);
+    ui.new_line();
     ui.dummy([0.0, theme::OFFSET_PANEL]);
     tight.end();
 }
