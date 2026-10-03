@@ -183,6 +183,11 @@ pub fn render(ui: &Ui, config: &mut Config) {
         ui.dummy([icon_box + 4.0, icon_box]);
         ui.same_line();
         let after_icon = ui.cursor_screen_pos();
+        // The text is drawn by hand from `after_icon`, so nothing is
+        // emitted onto the line `same_line()` opened. Close it here:
+        // `reserve_inward_block` cannot reserve the block's depth on a
+        // line taller than the offset, and the icon's line is 34px.
+        ui.new_line();
         draw.add_text([after_icon[0], cursor[1]], label_ink, label);
         // Lay out body segments left-to-right at the second-line y.
         let body_y = cursor[1] + line_h;

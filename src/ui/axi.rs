@@ -442,24 +442,30 @@ pub fn panel_inward(ui: &Ui, window: Rect, fill: [f32; 4]) -> Rect {
 /// cannot feed back into the auto-resize the way moving the cursor up
 /// would.
 ///
-/// `ItemSpacing` is zeroed for the dummy because imgui charges spacing
-/// BEFORE an item, not after: a plain dummy would reserve the offset
-/// plus a whole item gap, which is most of a line of dead space at the
-/// foot of a HUD surface that is only a few lines tall.
+/// imgui charges `ItemSpacing` BEFORE an item, not after, and the
+/// charge for this one is already sitting in the cursor when we are
+/// called. So the cursor is wound back by exactly that much and the
+/// dummy is emitted with spacing zeroed: what lands past the last item
+/// is the offset and nothing else. Reserve the offset plus a gap
+/// instead and the face carries a whole item of dead space under its
+/// content, which on a HUD surface a few lines tall is the difference
+/// between centred and visibly low.
 ///
-/// The open line is closed first. A body that ends with `same_line()`
-/// leaves a line open, and a zero-width dummy emitted onto a line
-/// taller than the offset reserves nothing at all — the face's bottom
-/// padding stays short and the content sits half the offset low. imgui
-/// has no "is a line open" query, and `new_line()` inserts a whole
-/// BLANK line when none is, so a sub-pixel dummy goes first: it lifts
-/// the current line height above zero either way, which is the
-/// condition `new_line()` branches on, and costs a fraction of a pixel.
+/// PRECONDITION: the body must not end on an open line — that is, the
+/// last call before this one must not be `same_line()`. A zero-width
+/// dummy emitted onto a line taller than the offset reserves nothing,
+/// so a caller that lays out a column with `same_line()` has to close
+/// the line with `new_line()` itself. Doing it here is not possible:
+/// imgui exposes no "is a line open" query, and `new_line()` on a
+/// CLOSED line inserts a whole blank line of font height — which is
+/// what this helper did before, and is why the HUD surfaces came out
+/// over-padded at the foot rather than under-padded.
 #[cfg(windows)]
 pub fn reserve_inward_block(ui: &Ui) {
+    let gap = ui.clone_style().item_spacing[1];
+    let [x, y] = ui.cursor_pos();
+    ui.set_cursor_pos([x, y - gap]);
     let tight = ui.push_style_var(arcdps::imgui::StyleVar::ItemSpacing([0.0, 0.0]));
-    ui.dummy([0.0, f32::EPSILON]);
-    ui.new_line();
     ui.dummy([0.0, theme::OFFSET_PANEL]);
     tight.end();
 }
