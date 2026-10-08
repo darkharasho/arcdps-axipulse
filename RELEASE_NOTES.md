@@ -1,22 +1,14 @@
 # Release Notes
 
-Version v0.5.2 — October 3, 2026
+Version v0.5.3 — October 8, 2026
 
-## The HUD surfaces are centred in their face
+## Safer self-updates
 
-v0.5.1 fixed the notifier's heartbeat riding low and overshot: both the
-toast and the team bar came back with a wide dead gap under their
-content instead, which is no more centred than being short was.
+The updater now checks that a downloaded update is actually a Windows
+DLL before swapping it in. An empty or broken download, such as an
+error page saved in place of the file, is deleted and the current
+plugin is kept, so a bad download can no longer replace a working
+axipulse.
 
-The helper that compensates a window for the depth its own block draws
-inward was reserving a whole blank line of text on top of the block. It
-had been written to force the layout engine down a particular branch by
-emitting a weightless item first — but that item closes the line by
-itself, so the branch it was trying to reach was never the one taken,
-and the line it inserted was a real one.
-
-The helper no longer touches layout lines at all. It gives back the gap
-the engine had already charged after the last item and reserves exactly
-the block's depth, nothing more. Content in both HUD surfaces now sits
-centred in the gray face, with the border and the offset block outside
-it where they belong.
+A half-written update left behind by an interrupted download is now
+cleaned up at startup, alongside the old copy from a previous update.
