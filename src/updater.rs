@@ -192,6 +192,14 @@ fn download_and_swap(dll_dir: &Path, asset_url: &str, tag: &str) -> Result<(), S
     file.sync_all().map_err(|e| format!("fsync: {e}"))?;
     drop(file);
 
+    // Reject an empty or non-PE download before it can replace the DLL.
+    let mut head = [0u8; 2];
+    let got = std::fs::File::open(&dll_new).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+    if !looks_like_dll(&head[..got]) {
+        let _ = std::fs::remove_file(&dll_new);
+        return Err("downloaded file is not a valid DLL".to_string());
+    }
+
     // Best-effort cleanup of any leftover `.old` from a prior session;
     // ignore failure (Windows may still hold a handle).
     let _ = std::fs::remove_file(&dll_old);
@@ -209,10 +217,17 @@ fn download_and_swap(dll_dir: &Path, asset_url: &str, tag: &str) -> Result<(), S
     Ok(())
 }
 
-/// Called from plugin init. Attempts to delete any leftover `.old`
-/// from a previous update. Failure is silent — we'll retry next session.
+/// A Windows DLL starts with the "MZ" DOS header.
+fn looks_like_dll(head: &[u8]) -> bool {
+    head.starts_with(b"MZ")
+}
+
+/// Called from plugin init. Attempts to delete any leftover `.old` or
+/// half-written `.new` from a previous update. Failure is silent — we'll
+/// retry next session.
 pub fn cleanup_stale_old(dll_dir: &Path) {
     let _ = std::fs::remove_file(dll_dir.join("arcdps_axipulse.dll.old"));
+    let _ = std::fs::remove_file(dll_dir.join("arcdps_axipulse.dll.new"));
 }
 
 #[cfg(test)]
@@ -220,6 +235,14 @@ mod tests {
     use super::*;
 
     const DLL: &str = "arcdps_axipulse.dll";
+
+    #[test]
+    fn dll_validation_requires_mz() {
+        assert!(looks_like_dll(b"MZ\x90\x00"));
+        assert!(!looks_like_dll(b""));
+        assert!(!looks_like_dll(b"M"));
+        assert!(!looks_like_dll(b"<html>"));
+    }
 
     fn release_json(tag: &str, body: &str, asset_name: &str) -> String {
         format!(
