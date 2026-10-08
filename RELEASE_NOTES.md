@@ -1,14 +1,13 @@
 # Release Notes
 
-Version v0.5.3 — October 8, 2026
+Version v0.5.4 — October 8, 2026
 
-## Safer self-updates
+## Update checks no longer hit GitHub's rate limit
 
-The updater now checks that a downloaded update is actually a Windows
-DLL before swapping it in. An empty or broken download, such as an
-error page saved in place of the file, is deleted and the current
-plugin is kept, so a bad download can no longer replace a working
-axipulse.
+The update check could fail with "status code 403". It used GitHub's
+API, which allows only 60 requests an hour from one connection, and
+every plugin in every game client shares that limit. The check now
+asks GitHub's release page directly, which has no such limit.
 
-A half-written update left behind by an interrupted download is now
-cleaned up at startup, alongside the old copy from a previous update.
+If GitHub does turn the check away, the message now says it is
+rate-limiting the connection instead of showing a bare status code.
