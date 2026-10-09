@@ -21,7 +21,7 @@
 //!   exactly the bytes retained by a `FightRecord` and nothing else --
 //!   no parse scratch space, no allocator slack.
 //! - A process RSS reading (`/proc/self/status`), printed for sanity
-//!   only. `mimalloc` is the crate's global allocator and, like most
+//!   only. The allocator, like most
 //!   sub-allocators, does not always hand freed pages back to the OS
 //!   between measurements, so an RSS delta after `drop` under-reports
 //!   what was freed and an RSS delta after parse can over-report it by
@@ -233,7 +233,7 @@ fn main() {
     drop(derived);
     let after_drop = rss_mb();
     println!(
-        "rss cross-check: before drop {:6.1} MB, after drop {:6.1} MB (mimalloc may not return freed pages to the OS; do not read this delta as the retained size)",
+        "rss cross-check: before drop {:6.1} MB, after drop {:6.1} MB (the allocator may not return freed pages to the OS; do not read this delta as the retained size)",
         before_drop, after_drop,
     );
 }

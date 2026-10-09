@@ -24,7 +24,7 @@ use crate::fight_data::FightData;
 // (`FightData` + `Derived`) is exactly 1,126,034 bytes (~1.07 MB),
 // computed field-by-field (`size_of` + every `Vec`/`String`/`HashMap`
 // heap allocation reachable from it) rather than read off process RSS,
-// since `mimalloc` (this crate's global allocator) does not reliably
+// since the allocator does not reliably
 // hand freed pages back to the OS between an RSS-before and an
 // RSS-after reading -- an RSS delta over- or under-reports the retained
 // size depending on which side of a `drop` it is taken on. Of that
