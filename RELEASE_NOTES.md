@@ -1,13 +1,10 @@
 # Release Notes
 
-Version v0.5.4 — October 8, 2026
+Version v0.5.5 — October 8, 2026
 
-## Update checks no longer hit GitHub's rate limit
+## Fixes
 
-The update check could fail with "status code 403". It used GitHub's
-API, which allows only 60 requests an hour from one connection, and
-every plugin in every game client shares that limit. The check now
-asks GitHub's release page directly, which has no such limit.
-
-If GitHub does turn the check away, the message now says it is
-rate-limiting the connection instead of showing a bare status code.
+- Fixed a crash in axipulse that could happen when one of the game's
+  threads shut down. arcdps caught it and the game kept running, but
+  addon windows could stop responding afterwards. Fights still parse
+  without a frame hitch.
