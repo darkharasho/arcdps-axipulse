@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "arcdps_axipulse"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "arcdps",
  "axilog-api",
@@ -96,8 +96,8 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "axilog-api"
-version = "1.5.1"
-source = "git+https://github.com/darkharasho/axilog.git?tag=v1.5.1#d24aa39fd933735ae16de7eec5f249755923d3b6"
+version = "1.16.2"
+source = "git+https://github.com/darkharasho/axilog.git?tag=v1.16.2#39261800938466e388e2469513e801528d32e8ec"
 dependencies = [
  "axilog-core",
  "axilog-schema",
@@ -105,8 +105,8 @@ dependencies = [
 
 [[package]]
 name = "axilog-core"
-version = "1.5.1"
-source = "git+https://github.com/darkharasho/axilog.git?tag=v1.5.1#d24aa39fd933735ae16de7eec5f249755923d3b6"
+version = "1.16.2"
+source = "git+https://github.com/darkharasho/axilog.git?tag=v1.16.2#39261800938466e388e2469513e801528d32e8ec"
 dependencies = [
  "flate2",
  "thiserror",
@@ -114,8 +114,8 @@ dependencies = [
 
 [[package]]
 name = "axilog-schema"
-version = "1.5.1"
-source = "git+https://github.com/darkharasho/axilog.git?tag=v1.5.1#d24aa39fd933735ae16de7eec5f249755923d3b6"
+version = "1.16.2"
+source = "git+https://github.com/darkharasho/axilog.git?tag=v1.16.2#39261800938466e388e2469513e801528d32e8ec"
 dependencies = [
  "axilog-core",
  "serde",
